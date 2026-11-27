@@ -1462,18 +1462,20 @@ async function lookUp(id: string, kept: Sending, files: (Attached | undefined)[]
 }
 // A send kept by the build before O262 (p9-inflight) has no operation ID of its own: that build's mutate kept it in p9-pending under
 // the body's key, so the same body finds the same ID, and the daemon replays the first try if it arrived.
-// O262 round 3: its ID is kept even marked used (a 401 on a retry; an earlier try may have landed). With no body to match it by (a file
-// gone: files undefined, the lookup) or none matching, the chat's one kept prompt ID is that send's; only with neither is a new one made.
+// O262 round 3: its ID is kept even marked used (a 401 on a retry; an earlier try may have landed). O262 round 4: only the same body
+// names it. The chat's one other kept prompt ID can be an earlier send that landed (that build dropped it only after a 202), so with no
+// body to match (a file gone: files undefined) the send stays on its card to be taken back; with its files and no match, a new ID.
 const GONE = 'P9 has no answer for this message yet. It may still arrive; check the chat before sending again. Its files are gone from this phone: take it back and attach them again.';
 async function legacyOp(id: string, kept: Sending, files?: Attached[]) {
-  const path = '/chat/' + encodeURIComponent(id) + '/prompt', all = keepPending(''), mine = Object.keys(all).filter((key) => key.startsWith(path + '\n'));
-  const known = (files && all[await opKey(path, JSON.stringify({ ...kept.body, ...attachBody(files) }))]) || (mine.length === 1 ? all[mine[0]] : undefined);
+  const path = '/chat/' + encodeURIComponent(id) + '/prompt';
+  const known = files && keepPending('')[await opKey(path, JSON.stringify({ ...kept.body, ...attachBody(files) }))];
   if (!known && !files) { note(GONE); return false; }
   kept.op = known?.id ?? crypto.randomUUID();
   if (keepSending(id, kept, '')) return true;
   kept.op = ''; note('Not sent: this phone\'s storage for P9 is full. Your message stays on its card.'); return false;
 }
 function answered(id: string, kept: Sending, files: (Attached | undefined)[], result: { status: number; body: Json }) {
+  if (stale(id, kept.op)) return false;
   const error = result.body.error;
   // 'outcome-unknown' is the daemon still running the first try: not an answer, so the send stays as it is.
   if (error === 'outcome-unknown') { note('Not sent yet: P9 is still working on your first try. Tap Send again in a moment; it will not go twice.'); return false; }
@@ -1507,9 +1509,18 @@ function answered(id: string, kept: Sending, files: (Attached | undefined)[], re
 // Ends a send only once where its message goes now is stored: put writes that at once (the box's draft, the queue, or the sent
 // files' tombstones) and says whether storage took it. Refused, the send stays, so a message is never in neither place.
 function settle(id: string, op: string, put: () => boolean) {
-  if (!put()) { label(); return false; }
+  if (stale(id, op) || !put()) { label(); return false; }
   // O262 round 3: only this operation's record goes; a newer send (another tab's) stays, and this tab shows it (fresh).
   keepSending(id, undefined, op); if (sending.get(id)?.op === op) sending.delete(id); fresh(id); label(); if (id === openId) renderAttached(); return true;
+}
+// O262 round 4: whose the card is comes first. Another tab took this send back, or made a newer one: this answer is not its to end, so
+// nothing goes to the box, the queue or the sent files, and the card is redrawn from storage. Read here, not by fresh (on its way, fresh
+// keeps this tab's copy); no await between this and the write, so no other tab's change falls in between.
+function stale(id: string, op: string) {
+  let now: string | undefined; try { now = readSending(localStorage.getItem(sendKey(id)))?.op; } catch {}
+  if (now === op) return false;
+  if (sending.get(id)?.op === op) sending.delete(id);
+  fresh(id); label(); if (id === openId) renderAttached(); return true;
 }
 // A send that did not go, back in its chat's box above anything typed since, written at once; its files are the box's again (they
 // were never out of the chat's list), its quotes chips again. An artifact's comments stay with the artifact.

@@ -1145,11 +1145,13 @@ test('O262 review: a send whose file is gone from the phone asks P9 what became 
   assert.equal(await page.inputValue('#prompt'), '', 'nothing came back to the box');
 });
 // O262 round 3: a late answer for an old send removes only its own record, never a newer send another tab made in the same chat.
-test('O262 round 3: a late answer for a send taken back in another tab leaves that tab\'s newer send kept', { timeout: 150000 }, async (t) => {
+// O262 round 4: and it puts nothing anywhere: a late refusal does not put the old text back in the box (a refusal) or in the queue
+// (turn-running: the queue is shared, so either tab would send it again), since the other tab took it back.
+for (const [late, status] of [['turn-running', 409], ['bad-request', 400]]) test(`O262 round 3: a late answer (${late}) for a send taken back in another tab leaves that tab's newer send kept, and the box and queue as they were`, { timeout: 150000 }, async (t) => {
   const { page, context, server, session } = await phoneOn(t);
   const id = await newChat(page, 'claude');
   let release; const held = new Promise((resolve) => { release = resolve; }); t.after(() => release());
-  await page.route((url) => url.pathname.endsWith('/prompt'), async (route) => { await held; await route.continue().catch(() => {}); });
+  await page.route((url) => url.pathname.endsWith('/prompt'), async (route) => { await held; await route.fulfill({ status, contentType: 'application/json', body: JSON.stringify({ error: late }) }).catch(() => {}); });
   await send(page, 'the older one');
   await pendingSend(page, 'the older one');
   const tab = await context.newPage();
@@ -1171,6 +1173,11 @@ test('O262 round 3: a late answer for a send taken back in another tab leaves th
   assert.ok(kept, 'the older send\'s answer erased the newer send');
   assert.equal(JSON.parse(kept).op, newer, 'the newer send\'s record was written over');
   assert.equal(JSON.parse(kept).body.text, 'the newer one');
+  assert.equal(await page.inputValue('#prompt'), '', 'the old send came back to this tab\'s box');
+  assert.equal(await page.evaluate((id) => JSON.parse(localStorage.getItem('p9-drafts') ?? '{}')[id] ?? null, id), null, 'the old send came back to the stored draft');
+  await page.waitForTimeout(2000); // a queued copy would go from either tab (the queue is shared storage)
+  assert.equal(await userCount(tab, 'the older one'), 0, 'the old send went again from the queue');
+  assert.equal(await page.evaluate((id) => localStorage.getItem('p9-queue:' + id), id), null, 'the old send was queued to go again');
 });
 
 test('O262 round 3: a retry refused by the lock (423) keeps its send and operation ID, and Send again arrives once', { timeout: 150000 }, async (t) => {
@@ -1221,6 +1228,31 @@ test('O262 round 3: a send whose file is gone, unknown to P9 (404): the note say
   await page.waitForFunction(() => !document.querySelector('#composerNote').hidden && document.querySelector('#composerNote').textContent, null, { timeout: 15000 });
   assert.match(await page.textContent('#composerNote'), /no answer for this message yet\. It may still arrive; check the chat before sending again/);
   await pendingSend(page, 'Comment on line 3'); // still kept
+});
+
+// O262 round 4: the build before O262 dropped a prompt's p9-pending ID only after a 202, so the chat's one kept ID can be an earlier
+// send that landed. A kept send whose files are gone has no body to match, so it never takes that ID: it is not looked up (that answer
+// would clear it as sent), and it stays on its card to be taken back.
+test('O262 round 4: a send kept by the build before, its files gone, beside another send\'s kept ID: not settled by that ID, its card stays', { timeout: 120000 }, async (t) => {
+  const { page } = await phoneOn(t);
+  const id = await newChat(page, 'claude');
+  const lookups = [];
+  page.on('request', (request) => { if (new URL(request.url()).pathname.startsWith('/operation/')) lookups.push(request.url()); });
+  await page.route((url) => url.pathname.startsWith('/operation/'), (route) => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ state: 'done', status: 202, body: '{}' }) }));
+  await page.evaluate((id) => {
+    localStorage.setItem('p9-pending', JSON.stringify({ ['/chat/' + encodeURIComponent(id) + '/prompt\nan earlier send']: { id: crypto.randomUUID() } }));
+    localStorage.setItem('p9-inflight', JSON.stringify({ [id]: { draft: JSON.stringify(['its file went', ['67:not-on-this-phone']]), sent: { text: 'its file went' } } }));
+  }, id);
+  await page.reload();
+  await page.waitForFunction((id) => document.querySelector('#conversation').value === id, id, { timeout: 15000 });
+  await pendingSend(page, 'its file went');
+  await page.waitForTimeout(1000); // the file store is read
+  await page.click('#sending [data-retry]');
+  await page.waitForFunction(() => /no answer for this message yet/.test(document.querySelector('#composerNote').textContent), null, { timeout: 15000 });
+  await page.waitForTimeout(1000);
+  assert.equal(lookups.length, 0, 'the send was looked up by another send\'s ID: ' + lookups.join(' | '));
+  await pendingSend(page, 'its file went'); // still kept, to be taken back
+  assert.equal(await page.evaluate((id) => JSON.parse(localStorage.getItem('p9-sending:' + id) ?? 'null')?.op ?? null, id), '', 'it took an ID it cannot know is its own');
 });
 
 test('O262 round 3: Stop stays while a send has no answer and the agent is working', { timeout: 120000 }, async (t) => {
