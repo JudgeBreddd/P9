@@ -38,7 +38,7 @@ test('O274: a config with no effort picker clears the effort list_chats and the 
   assert.equal(await effort(), null, 'no effort shown for a model that has none');
 });
 
-// #560 r3: a message handed back unsent gives its text back once, not once per ID it waited under (a resumed one has two).
+// #560 r3: a joined prompt kept from before O246 (mixed) is a sender of its own: it neither joins the user's queued message nor loses its record.
 test('O274: a kept joined prompt (mixed) waiting behind a turn goes alone, apart from the user\'s queued message', { timeout: 120000 }, async (t) => {
   const { instance, id } = await stopped(t);
   fs.writeFileSync(path.join(instance.workspace, 'log-prompts'), '');
