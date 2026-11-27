@@ -979,10 +979,12 @@ test('USE-1 web on the phone: Usage draws one plan card per agent in the usage l
 // so the cards came back over its "Usage unavailable".
 test('USE-1 web on the phone: names arriving after a failed Usage read leave "Usage unavailable" up', { timeout: 90000 }, async (t) => {
   const { page } = await phoneOn(t);
+  const usage = await page.evaluate(() => fetch('/usage').then((r) => r.json()));
+  usage.limits = { claude: { asOf: Date.now(), fiveHour: { usedPercent: 40, resetsAt: Date.now() + 3600000, windowMins: 300 }, sevenDay: null, stale: false }, codex: null };
   let release; const held = new Promise((r) => { release = r; }); t.after(() => release());
   await page.route('**/agents', async (route) => { await held; await route.continue().catch(() => {}); });
   let reads = 0;
-  await page.route('**/usage', (route) => (++reads === 1 ? route.continue() : route.abort()));
+  await page.route('**/usage', (route) => (++reads === 1 ? route.fulfill({ json: usage }) : route.abort()));
   await page.reload(); await page.locator('#newChat').waitFor();
   await page.click('[data-nav="usage"]');
   await page.waitForSelector('#usage [data-limits]', { timeout: 15000 }); // the first read drew
