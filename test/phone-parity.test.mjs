@@ -236,6 +236,22 @@ test('O246: the phone\'s "As set" sends the mode it shows with the message, the 
   await page.waitForFunction(() => document.querySelector('#mode option').textContent === 'Mode: Plan', null, { timeout: 10000 });
   assert.deepEqual(await sent('third'), ['Plan', 202], 'under the lock: the mode it shows (an unlock before its turn does not widen it), and the send is taken');
   await echoed('echo:third');
+  // Round 4: the unlock's mode and a turn's end come in one poll; the redraw waits on the relist. A tap then sends what it shows.
+  // Round 4: the unlock's mode and a turn's end come in one poll; the redraw waits on the relist. A tap then sends what it shows.
+  // Both routes stay on, passing through once done: a route taken off can turn interception off, which lets a held request go.
+  let holdPoll = true, holdList = false, caught, release, listed, open;
+  const polled = new Promise((r) => { caught = r; }), gate = new Promise((r) => { release = r; });
+  const relisting = new Promise((r) => { listed = r; }), hold = new Promise((r) => { open = r; });
+  await page.route((url) => url.pathname === '/chat/events', async (route) => { if (holdPoll) { caught(); await gate; } await route.continue(); });
+  await page.route((url) => url.pathname === '/chat', async (route) => { if (holdList) { holdList = false; listed(); await hold; } await route.continue(); });
+  await polled; // the poll before the route has answered (at most its 8 s wait); this one waits for both events
+  assert.equal((await server.desk('/agent-lock', 'POST', { on: false })).status, 200);
+  assert.equal((await server.desk('/chat/' + id + '/prompt', 'POST', { text: 'quiet', op: crypto.randomUUID() })).status, 202);
+  for (let i = 0; i < 100; i += 1) { const { body } = await server.desk('/chat/events?after=0'); if ((body.events ?? []).some((e, n, all) => e.type === 'user' && JSON.stringify(e.data).includes('quiet') && all.slice(n).some((x) => x.type === 'turn-end' && x.conversation === id))) break; await new Promise((r) => setTimeout(r, 100)); }
+  holdPoll = false; holdList = true; release(); await relisting;
+  assert.equal(await page.$eval('#mode option', (el) => el.textContent), 'Mode: Plan', 'not redrawn yet');
+  assert.deepEqual(await sent('fourth'), ['Plan', 202], 'the mode it shows, not the unlock\'s still to be drawn');
+  open(); await echoed('echo:fourth');
 });
 test('P6: the composer stays on the chat on screen when that chat leaves the list (stopped unused on the desktop)', { timeout: 60000 }, async (t) => {
   const { page, server } = await phoneOn(t);

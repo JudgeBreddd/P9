@@ -1064,6 +1064,8 @@ function renderPicks(id: string) {
   const mode = one<HTMLSelectElement>('#mode'), keep = picksFor.startsWith(id + ':') ? mode.dataset.was ?? '' : startPick.get(id) ?? '';
   picksFor = key;
   mode.innerHTML = `<option value="">Mode: ${escape(set?.name ?? 'as set')}</option>` + ((modes as Record<string, string[]>)[provider(id)] ?? []).map((name) => `<option value="${escape(name)}">Mode: ${escape(name)}</option>`).join('');
+  // O246 round 4: the mode "As set" shows, for the send to read (submitFromBox): the events can say another before this redraws.
+  mode.dataset.shown = set?.name ?? ''; mode.dataset.for = id;
   mode.value = keep || (chosen.get(id)?.get('mode')?.value ?? ''); mode.dataset.was = mode.value; startPick.delete(id); pill();
   type Pick = { current?: string; options?: { value: string; name: string }[] };
   const config = (configs.at(-1)?.data ?? agentLists[provider(id)] ?? {}) as { // O47: a chat not started yet offers its agent's kept lists
@@ -1353,7 +1355,10 @@ async function submitFromBox(event: Event) {
   // O246: "As set" sends the mode it shows when pressed, as the desktop does (sentMode), the lock's too, so neither a wider
   // mode another sender's message sets just ahead of this one nor an unlock before its turn is what it runs in. The live lock
   // still narrows it at its turn. None reported yet: none.
-  const mode = one<HTMLSelectElement>('#mode').value || sentMode(provider(id), picksOf(id).set?.name), model = one<HTMLSelectElement>('#model');
+  // Round 4: what it shows is what was drawn (dataset.shown), not the events read since: a mode event polled with a turn's end
+  // is in the events while the relist before the redraw is still on its way.
+  const shown = one<HTMLSelectElement>('#mode'), drawn = shown.dataset.for === id ? shown.dataset.shown || undefined : picksOf(id).set?.name;
+  const mode = shown.value || sentMode(provider(id), drawn), model = one<HTMLSelectElement>('#model');
   const config = Object.fromEntries([...document.querySelectorAll<HTMLSelectElement>('#pickers select')].filter((pick) => pick.value !== pick.dataset.current).map((pick) => [pick.dataset.config!, pick.value]));
   const body = { text, ...(mode && { mode }), ...(model.value && model.value !== model.dataset.current && { model: model.value }), ...(Object.keys(config).length && { config }) };
   const picked = new Map([...chosen.get(id) ?? []].map(([key, pick]) => [key, pick.value])); // what goes with this send; a pick made while it is on its way is the next message's

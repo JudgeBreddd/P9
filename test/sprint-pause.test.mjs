@@ -466,7 +466,11 @@ const pausedTurnEnd = async (t, full) => {
   for (let i = 0; i < 60 && !(await got('owner-second')); i += 1) await pause(250);
   assert.ok(await got('owner-second'), 'the owner\'s message waited behind the kept one for Resume');
   assert.equal(await got('lead-first'), false, 'the lead\'s message ran while the sprint was paused');
-  if (full) return; // refused by name to its sender (sprint-paused-full); the 100 kept go at Resume, as the cap test shows
+  if (full) { // refused by name and handed back to its sender (sprint-paused-full); the 100 kept go at Resume, as the cap test shows
+    const back = (await events(instance, w1)).filter((e) => e.type === 'unheld' && e.data.text === 'lead-first');
+    assert.deepEqual(back.map((e) => [e.data.why, typeof e.data.from]), [['sprint-paused-full', 'string']], 'the lead\'s message was not handed back to it by name: ' + JSON.stringify(back));
+    return;
+  }
   // Kept, not lost: Resume sends it.
   assert.deepEqual((await call(instance, `/sprints/${sprint}/resume`, 'POST', {})).body, { paused: false, sent: 1 });
   for (let i = 0; i < 60 && !(await got('lead-first')); i += 1) await pause(250);
