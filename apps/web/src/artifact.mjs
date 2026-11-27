@@ -133,7 +133,7 @@ export function artifactView(box, state, { page, base, send, modes }) {
   };
   const pressed = () => box.querySelectorAll('[data-art-mode]').forEach(b => b.setAttribute('aria-pressed', String(!!modes[b.dataset.artMode].on?.())));
   box.querySelectorAll('[data-art-mode]').forEach(b => b.onclick = () => { modes[b.dataset.artMode].go(); pressed(); });
-  state.refresh = pressed;
+  state.refresh = () => { pressed(); show(); }; // also the list: the phone clears comments sent from its retry card (O262)
   ta.value = state.draft ?? ''; ta.oninput = () => { state.draft = ta.value; };
   $('form').onsubmit = e => {
     e.preventDefault(); const text = ta.value.trim(); if (!text) return ta.focus();

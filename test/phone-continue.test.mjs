@@ -238,7 +238,8 @@ test('O267: a message the phone\'s full storage refuses is not queued and stays 
   assert.equal(await page.evaluate((key) => localStorage.getItem(key), 'p9-queue:' + id), null);
   // Online, the daemon answering turn-running (the phone queues it for the turn's end): the same refusal.
   await page.fill('#prompt', ''); await setOnline(page, true); await page.waitForSelector('#stale', { state: 'hidden' });
-  // The answer comes after the box was changed to other words: both are in the box, the sent one first.
+  // The answer comes after the box was changed to other words. O262: the queue refuses it, so the send stays on its card (its record
+  // is removed only once its message is stored elsewhere), and the box keeps the new words whole.
   let answer; const answered = new Promise((done) => { answer = done; });
   await page.route('**/chat/*/prompt', async (route) => { await answered; await route.fulfill({ status: 409, contentType: 'application/json', body: JSON.stringify({ error: 'turn-running' }) }); });
   await page.evaluate(() => { document.querySelector('#composerNote').hidden = true; });
@@ -246,10 +247,14 @@ test('O267: a message the phone\'s full storage refuses is not queued and stays 
   await page.fill('#prompt', 'look'); await page.click('#composer button');
   await page.fill('#prompt', 'lookup failed'); answer();
   await page.waitForSelector('#composerNote:not([hidden])');
-  assert.match(await page.textContent('#composerNote'), /storage is full\. Your message is back in the box/);
-  assert.equal(await page.inputValue('#prompt'), 'look\nlookup failed', 'the sent words came back above the new ones');
+  assert.match(await page.textContent('#composerNote'), /storage for P9 is full\. Your message stays on its card/);
+  assert.equal(await page.inputValue('#prompt'), 'lookup failed', 'the box keeps the new words whole');
+  assert.match(await page.textContent('#sending'), /look/, 'the send stays on its card');
   assert.equal(await page.locator('#queued').isHidden(), true, 'not queued');
   await page.unroute('**/chat/*/prompt');
+  await page.click('#sending [data-take]'); // taken back: above the new words
+  await page.waitForFunction(() => document.querySelector('#sending').hidden, null, { timeout: 10000 });
+  assert.equal(await page.inputValue('#prompt'), 'look\nlookup failed', 'the sent words came back above the new ones');
   // Take back that storage refuses to record: the message stays queued (a reopened app would send it), not also in the box.
   await page.evaluate(() => { Storage.prototype.setItem = window.o267set; });
   await page.fill('#prompt', ''); await setOnline(page, false); await page.waitForSelector('#stale:not([hidden])');

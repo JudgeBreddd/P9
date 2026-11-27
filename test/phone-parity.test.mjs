@@ -787,20 +787,21 @@ test('O55 round 2: a send that never gets its answer lets go at the deadline, ke
 });
 
 // Round 3: three ways the send's recovery could still fail. Each of these failed on the round 2 head.
-test('O55 round 3: Interrupt with a stalled event read lets go of the composer, and a later send goes', { timeout: 180000 }, async (t) => {
+test('O55 round 3: Interrupt lets go of the composer, its message arrives, and a later send goes', { timeout: 180000 }, async (t) => {
   const { page } = await phoneOn(t);
   await newChat(page, 'claude');
   await send(page, 'slow');
   await said(page, 'working');
   await page.fill('#prompt', 'do this instead');
   await page.waitForSelector('#midTurn:not([hidden])', { timeout: 5000 });
-  // Interrupt's own reads of the chat (wait=1000) never answer; the cancel itself does.
-  let release; const held = new Promise((resolve) => { release = resolve; });
-  t.after(release);
-  await page.route((url) => url.pathname.endsWith('/chat/events') && url.search.includes('wait=1000'), async (route) => { await held; await route.abort().catch(() => {}); });
+  const posts = [];
+  page.on('request', (request) => { if (request.url().endsWith('/prompt')) posts.push(JSON.parse(request.postData()).when); });
   await page.click('#midTurn [data-when="now"]');
-  // O262: Interrupt is one request now (the daemon stops the turn and sends it first): it goes, never locked behind the stalled read.
+  // O262: Interrupt is one request now (the daemon stops the turn and sends this first), so the phone waits on no read of the
+  // chat for the turn to end (the round 3 lock), and the message itself reaches the agent.
   await sendSettled(page);
+  await said(page, 'echo:do this instead');
+  assert.deepEqual(posts, ['now'], 'one request, as when now');
   await page.fill('#prompt', 'later one');
   await page.evaluate(() => document.querySelector('#composer').requestSubmit());
   // Sent or queued behind the turn, the box empties; a locked composer would leave the text there.
@@ -1044,6 +1045,105 @@ test('O262: attachments changed after a send with no answer: Send again is the s
   assert.equal(await userCount(page, 'with a file'), 1, 'the message arrived twice');
   assert.equal(await page.evaluate(() => document.querySelectorAll('#attached .chip-img').length), 1, 'the file attached since stays in the box');
 });
+// O262 review: where a settled send's message goes (the box's stored draft, or the queue) is written before its own record is removed,
+// in the same task, so a page killed at any moment after the answer finds it in one or the other. The page here watches its storage
+// on every change from the send's first moment, and notes any instant at which the message was stored nowhere.
+const watchStored = (page, text) => page.evaluate((w) => {
+  window.gaps = [];
+  const look = () => { const all = Object.keys(localStorage).map((key) => localStorage.getItem(key)).join('\n'); if (!all.includes(w)) window.gaps.push(document.querySelector('#composerNote').textContent || 'no note'); };
+  new MutationObserver(look).observe(document.body, { subtree: true, childList: true, characterData: true, attributes: true }); look();
+}, text);
+for (const [how, status, error] of [['refused', 400, 'model-refused'], ['refused mid-turn (queued)', 409, 'turn-running']]) test(`O262 review: a send ${how} is stored in its new place before its record goes, so a page killed after the answer keeps it`, { timeout: 120000 }, async (t) => {
+  const { page } = await phoneOn(t);
+  await newChat(page, 'claude');
+  let release; const held = new Promise((resolve) => { release = resolve; }); t.after(() => release());
+  await page.route((url) => url.pathname.endsWith('/prompt'), async (route) => { await held; await route.fulfill({ status, contentType: 'application/json', body: JSON.stringify({ error }) }).catch(() => {}); });
+  await send(page, 'kept through a kill');
+  await pendingSend(page, 'kept through a kill');
+  await watchStored(page, 'kept through a kill');
+  release();
+  await sendSettled(page);
+  await page.waitForTimeout(100);
+  assert.deepEqual(await page.evaluate(() => window.gaps), [], 'the message was stored nowhere for a moment after the answer');
+});
+
+test('O262 review: a draft typed in another tab, in another chat, while a send has no answer leaves that send kept, and Send again is the same operation', { timeout: 150000 }, async (t) => {
+  const { page, context, server } = await phoneOn(t);
+  const other = await newChat(page, 'claude'), id = await newChat(page, 'claude');
+  const ops = [];
+  page.on('request', (request) => { if (request.url().endsWith('/prompt')) ops.push(request.headers()['x-p9-op']); });
+  // Tab B is open before the send (it read this phone's storage before the send was in it), on the other chat.
+  const tab = await context.newPage();
+  await tab.goto(server.origin + '/phone/#chat=' + other);
+  await tab.waitForFunction((other) => document.querySelector('#conversation').value === other, other, { timeout: 15000 });
+  await lostAnswer(page);
+  await send(page, 'kept from another tab');
+  await page.waitForFunction(() => /Not sent yet/.test(document.querySelector('#composerNote').textContent), null, { timeout: 30000 });
+  // While the send has no answer, B types a draft in the other chat.
+  await tab.fill('#prompt', 'a draft in the other chat');
+  await tab.waitForTimeout(1000); // its draft is written
+  await page.reload();
+  await page.waitForFunction((id) => document.querySelector('#conversation').value === id, id, { timeout: 15000 });
+  await pendingSend(page, 'kept from another tab');
+  await page.click('#sending [data-retry]');
+  await sendSettled(page);
+  await said(page, 'echo:kept from another tab');
+  await page.waitForTimeout(2000);
+  assert.equal(ops.length, 2, 'two posts: ' + ops.join(' | '));
+  assert.equal(ops[1], ops[0], 'Send again was a new operation');
+  assert.equal(await userCount(page, 'kept from another tab'), 1, 'the message arrived twice');
+  await tab.reload(); await tab.waitForFunction((other) => document.querySelector('#conversation').value === other, other, { timeout: 15000 });
+  assert.equal(await tab.inputValue('#prompt'), 'a draft in the other chat', 'the other tab kept its own draft');
+});
+
+test('O262 review: a retry that gets a 401 keeps its send and operation ID through the sign-in, and Send again arrives once', { timeout: 150000 }, async (t) => {
+  const { page } = await phoneOn(t);
+  const id = await newChat(page, 'claude');
+  const ops = [];
+  page.on('request', (request) => { if (request.url().endsWith('/prompt')) ops.push(request.headers()['x-p9-op']); });
+  await lostAnswer(page); // the first try lands, its answer is lost
+  await send(page, 'kept through a sign-in');
+  await page.waitForFunction(() => /Not sent yet/.test(document.querySelector('#composerNote').textContent), null, { timeout: 30000 });
+  // The session ends before the retry: the retry never reaches the daemon's operations.
+  await page.route((url) => url.pathname.endsWith('/prompt'), (route) => route.fulfill({ status: 401, contentType: 'application/json', body: '{"error":"login-required"}' }), { times: 1 });
+  await page.click('#sending [data-retry]');
+  await page.waitForURL(/\/login/, { timeout: 10000 });
+  await page.click('#login');
+  await page.waitForURL(/\/phone\//, { timeout: 15000 });
+  await page.waitForFunction((id) => document.querySelector('#conversation').value === id, id, { timeout: 15000 });
+  await pendingSend(page, 'kept through a sign-in');
+  assert.match(await page.textContent('#sending'), /Sign-in ended/);
+  assert.equal(await page.inputValue('#prompt'), '', 'not put back in the box, where a send would be a new operation');
+  await shot(page, 'o262-after-sign-in');
+  await page.click('#sending [data-retry]');
+  await sendSettled(page);
+  await said(page, 'echo:kept through a sign-in');
+  await page.waitForTimeout(2000);
+  assert.equal(ops.length, 3, 'three posts: ' + ops.join(' | '));
+  assert.equal(new Set(ops).size, 1, 'every try is the same operation: ' + ops.join(' | '));
+  assert.equal(await userCount(page, 'kept through a sign-in'), 1, 'the message arrived twice');
+});
+
+test('O262 review: a send whose file is gone from the phone asks P9 what became of it: an answer it got settles it, with no second post', { timeout: 120000 }, async (t) => {
+  const { page } = await phoneOn(t);
+  const id = await newChat(page, 'claude');
+  const posts = [], lookups = [];
+  page.on('request', (request) => { const path = new URL(request.url()).pathname; if (path.endsWith('/prompt')) posts.push(path); if (path.startsWith('/operation/')) lookups.push(path); });
+  await lostAnswer(page);
+  await paste(page, 'gone.png');
+  await page.waitForFunction(() => document.querySelectorAll('#attached .chip-img').length === 1, null, { timeout: 10000 });
+  await send(page, 'its file went away');
+  await page.waitForFunction(() => /Not sent yet/.test(document.querySelector('#composerNote').textContent), null, { timeout: 30000 });
+  // Its file leaves this phone (as when another tab sent it, or the store never took it before a reload).
+  await page.evaluate((id) => localStorage.setItem('p9-attached-sent', JSON.stringify(JSON.parse(localStorage.getItem('p9-sending:' + id)).files)), id);
+  await page.click('#sending [data-retry]');
+  await sendSettled(page);
+  await page.waitForTimeout(2000);
+  assert.equal(posts.length, 1, 'one post: the retry asked instead of sending again');
+  assert.equal(lookups.length, 1, 'the retry asked P9 once');
+  assert.equal(await userCount(page, 'its file went away'), 1, 'the message arrived once');
+  assert.equal(await page.inputValue('#prompt'), '', 'nothing came back to the box');
+});
 // Threat model row O48p: the phone starts chats with any provider.
 test('CAT-1f on the phone: New chat lists every agent from GET /agents, a new one too', { timeout: 90000 }, async (t) => {
   const { page } = await phoneOn(t);
@@ -1286,12 +1386,12 @@ test('O206: a refused send clears its own pick, not a newer pick of the same mod
   await pick('haiku'); await pick('opus'); release(); await noted('Not sent: model-refused');
   await is(opusPending, 'queue: the newer Opus pick was cleared by the old refusal');
   await page.unroute(prompts);
-  // A send kept in storage (O262: p9-drafts' sending) comes back after a reload with its pick; Send again is that send (its first
-  // body), and refused for good, its pick clears.
+  // A send kept in storage by the build before O262 (p9-inflight, from before picks had a pid) comes back after a reload with its pick,
+  // as its own send now (O262 keeps it instead of dropping it); Send again is that send (its first body), and refused for good, its pick
+  // still clears.
   const id = await page.evaluate(() => document.querySelector('#conversation').value);
   await page.fill('#prompt', '');
-  await page.waitForTimeout(600); // the emptied box's own write lands first, so the page does not write over the stored send as it goes
-  await page.evaluate((id) => localStorage.setItem('p9-drafts', JSON.stringify({ sending: { [id]: { op: crypto.randomUUID(), body: { text: 'kept, first try', model: 'opus' }, typed: 'kept, first try', files: [], pids: { model: 'p-kept' }, picked: [['model', 'opus']], picks: [['model', { base: '', value: 'opus', pid: 'p-kept' }]] } } })), id);
+  await page.evaluate((id) => localStorage.setItem('p9-inflight', JSON.stringify({ [id]: { draft: JSON.stringify(['kept', [], JSON.stringify([['model', 'opus']])]), sent: { text: 'kept, first try', model: 'opus' }, picks: [['model', { base: '', value: 'opus' }]] } })), id);
   await page.reload();
   await page.waitForFunction((id) => document.querySelector('#conversation').value === id && document.querySelector('#modelBtn')?.textContent.includes('Default'), id, { timeout: 15000 });
   await is(opusPending, 'a kept send: its pick shows as pending after the reload');
@@ -1299,7 +1399,8 @@ test('O206: a refused send clears its own pick, not a newer pick of the same mod
   await pendingSend(page, 'kept, first try');
   await page.click('#sending [data-retry]'); await noted('Not sent: model-refused');
   assert.equal(went?.text, 'kept, first try', 'the kept send went again as itself (its first body), not rebuilt from the box');
-  await is(running, 'a kept send: its refused pick still shows as pending');
+  await is(running, 'a kept send without a pid: its refused pick still shows as pending');
+  assert.equal(await page.evaluate(() => localStorage.getItem('p9-inflight')), null, 'the old record was moved, not left to come back');
   await page.unroute(prompts);
   console.log('PASS O206: newer same-model pick kept after an old refusal (box and queue); plain and kept-send refusals clear');
 });

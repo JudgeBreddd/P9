@@ -25,6 +25,9 @@ async function settled(page, want) {
 }
 const send = async (page, text) => { await page.fill('#prompt', text); await page.click('#composer button[type="submit"]'); };
 
+// O262: the send has its answer: its card over the box is gone (it is settled), so a reload cannot cut in before it.
+const sent = (page) => page.waitForFunction(() => document.querySelector('#sending')?.hidden, null, { timeout: 15000 });
+
 test('O264: files sent with an accepted message stay gone after a reload when the store never took them out; a refused send keeps them', { timeout: 120000 }, async (t) => {
   const server = await remoteDaemon(t, {});
   seedChat(server);
@@ -85,7 +88,7 @@ test('O264 round 2: a file attached while a send is on its way stays, even when 
   for (const end = Date.now() + 10000; (await seen(page)).stored < 2 && Date.now() < end;) await new Promise((done) => setTimeout(done, 200));
   assert.equal((await seen(page)).stored, 2, 'b.txt kept, a.txt still kept while its send waits');
   await blockStore(page); release();
-  await page.waitForFunction(() => document.querySelectorAll('#attached .chip-file').length === 1, null, { timeout: 10000 });
+  await sent(page); // the answer is in: the send is settled (its files marked sent) before the reload
   await page.reload(); await page.waitForSelector('#prompt', { state: 'visible', timeout: 15000 });
   assert.deepEqual(await settled(page, 1), { chips: 1, stored: 1 });
   assert.deepEqual(await names(page), ['b.txt'], 'only the file that was not sent comes back');
@@ -107,7 +110,7 @@ test('O264 round 2: files on their way are not in the box, and none come back af
   await page.waitForFunction(() => !document.querySelectorAll('#attached .chip-img, #attached .chip-file').length, null, { timeout: 10000 });
   await blockStore(page);
   release();
-  await page.waitForFunction(() => !document.querySelectorAll('#attached .chip-img, #attached .chip-file').length, null, { timeout: 10000 });
+  await sent(page);
   await page.reload(); await page.waitForSelector('#prompt', { state: 'visible', timeout: 15000 });
   assert.deepEqual(await settled(page, 0), { chips: 0, stored: 0 }, 'a file that went came back');
   console.log('PASS O264 r2 on its way: both files sent, no chips while on their way, none back after the reload');
