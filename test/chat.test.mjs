@@ -419,7 +419,11 @@ test('agent lock: no-write mode for new and running sessions, permission request
   assert.ok(moved.on === was.on && moved.rev !== was.rev, 'the last rev makes the change and gives a new one');
   // Rounds 2 and 3: on and off at once, the second landing while the first switches live sessions. Both replies give the
   // lock as the daemon has it now; only the last write's carries its rev, the other's is null (changed after, not to put back).
+  // O273: the settings are held 300 ms each while the two go, so the first is still switching when the second lands; with
+  // instant settings the first could finish before the second arrived, and both replies kept their rev (the CI flake).
+  await writeFile(path.join(instance.workspace, 'slow-config'), '300');
   const both = (await Promise.all([lock({ on: true, rev }), lock({ on: false })])).map((r) => r.body), now = (await json(call(instance, '/agent-lock'))).body;
+  await unlink(path.join(instance.workspace, 'slow-config'));
   assert.deepEqual(both.map((b) => b.on), [now.on, now.on], 'a reply showed a lock the daemon no longer has: ' + JSON.stringify(both));
   assert.deepEqual(both.map((b) => b.rev === null).sort(), [false, true], 'not exactly one reply superseded: ' + JSON.stringify(both));
   assert.equal(both.find((b) => b.rev !== null).rev, now.rev, 'the last write\'s reply has the live rev');
