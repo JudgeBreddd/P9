@@ -5,7 +5,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { once } from 'node:events';
 import { restart } from './helpers.mjs';
-import { start, call, agent, connect, until } from './delegate-helpers.mjs';
+import { start, call, agent, connect, until, pause } from './delegate-helpers.mjs';
 
 test('A2 goal: an agent\'s goal reaches read_chat, list_chats and wait_chat; none, cleared and junk give none; a restart keeps it', { timeout: 240000 }, async (t) => {
   let instance = await start(t);
@@ -43,7 +43,11 @@ test('A2 goal: an agent\'s goal reaches read_chat, list_chats and wait_chat; non
     instance.child.kill('SIGTERM'); await once(instance.child, 'exit');
     instance = await restart(t, instance, name);
     const cursor = await now();
-    await call(instance, `/chat/${a.conversation}/prompt`, 'POST', { text: 'mcp' });
+    // O271: the restart may cut the kid mid-turn ('goal sent' can come before its turn end), and P9's restart line then
+    // runs a turn on a; a plain 'mcp' that met it was steered in and never answered 'mcp:'. Queued, it waits for that turn.
+    let asked;
+    for (let i = 0; i < 100 && (asked = await call(instance, `/chat/${a.conversation}/prompt`, 'POST', { text: 'mcp', when: 'queue' })).status === 409; i += 1) await pause(100);
+    assert.ok([200, 202].includes(asked.status), JSON.stringify([asked.status, asked.body]));
     a = await connect(t, instance, a.conversation, cursor);
   };
   await again('state-2');
