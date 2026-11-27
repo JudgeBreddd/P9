@@ -349,7 +349,8 @@ async function fetchEvents(wait = 0) {
     else gapAfter(state.events.find((event) => Number(event.cursor) > state.seen));
     // P18: a Stop hands back the messages still held for its turn (as the desktop does): they go back in the box. So do
     // those of a start the chat's close, Stop or exit ended before its turn (stopped, #540 review 15).
-    for (const event of state.events) if (Number(event.cursor) > state.seen && event.type === 'unheld' && ['cancelled', 'stopped'].includes(String((event.data as Json)?.why)))
+    // #540 review 16: the user's own only; one another chat or P9 sent (from) is not put in the user's box.
+    for (const event of state.events) if (Number(event.cursor) > state.seen && event.type === 'unheld' && ['cancelled', 'stopped'].includes(String((event.data as Json)?.why)) && !(event.data as Json).from)
       putBack(String(event.conversation), String((event.data as Json).text)); // O61: into its own chat's text, open or not
   }
   state.seen = state.cursor; localStorage.setItem('p9-cursor', String(state.cursor));
@@ -535,6 +536,11 @@ function foldBlocks(now: Folded, events: Json[]) {
     else if (kind === 'turn-end') { settle(); if (data.stopReason !== 'end_turn') add('note', 'Turn ended · ' + data.stopReason); }
     else if (kind === 'error') add('error', data.message);
     else if (kind === 'steer-lost') add('note', 'This message may not have reached the agent · ' + data.text);
+    // #540 review 16, as the window: a held message handed back that does not go into the box (another chat's or P9's, or
+    // refused) is told as not sent. The user's own taken back, cancelled or stopped goes into the box instead (fetchEvents).
+    // Review round 2 finding 5: only one that really was not sent. Noted, resumed (it goes next) and replaced (its newer
+    // text goes) are not failures, nor removed (the user's own x).
+    else if (kind === 'unheld' && !['noted', 'resumed', 'replaced', 'removed'].includes(String(data.why)) && (data.from || !['cancelled', 'stopped'].includes(String(data.why)))) add('note', 'Not sent (' + data.why + '): ' + data.text);
     else if (kind === 'interrupted') { settle(); add('note', 'Stopped · The P9 daemon restarted mid-turn. Send again to resume.'); }
     else if (kind === 'exited' || kind === 'stopped') { settle(); add('note', 'Stopped · Send again to resume.'); }
   }

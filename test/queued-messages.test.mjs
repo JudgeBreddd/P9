@@ -444,13 +444,15 @@ test('O267 review 15: an Interrupt held while a start sets its model comes back 
   const { instance, id, launch, open, ends } = await setup(t, 'o267-stopped');
   await until(async () => await ends() === 1, 'hello answered');
   const { page } = await launch(), chat = await open(page);
-  await writeFile(path.join(instance.workspace, 'slow-config'), '4000');
-  const first = call(instance, '/chat/' + id + '/prompt', 'POST', { text: 'on haiku', model: 'haiku' });
-  await until(() => existsSync(path.join(instance.workspace, 'config-started')), 'the start is setting its model');
+  // O267b: the file and the words are in the box before the start begins, and the setting never answers by itself, so the
+  // window's work does not race a fixed delay; only the start's own 5 s cap on its model set bounds the steps below.
   const [chooser] = await Promise.all([page.waitForEvent('filechooser', { timeout: 10000 }), chat.pane.locator('[data-attach]').click()]);
   await chooser.setFiles([{ name: 'keep.txt', mimeType: 'text/plain', buffer: Buffer.from('keep') }]);
   await chat.pane.locator('.attach .att-file', { hasText: 'keep.txt' }).waitFor({ timeout: 10000 });
   await chat.pane.locator('.composer textarea').fill('cut in');
+  await writeFile(path.join(instance.workspace, 'slow-config'), '600000');
+  const first = call(instance, '/chat/' + id + '/prompt', 'POST', { text: 'on haiku', model: 'haiku' });
+  await until(() => existsSync(path.join(instance.workspace, 'config-started')), 'the start is setting its model');
   await chat.pane.locator('.composer textarea').press('Control+Enter');
   await until(async () => (await said(instance, id, 'held')).some((e) => e.data.text === 'cut in'), 'the Interrupt is held');
   const box = async () => JSON.stringify([await chat.pane.locator('.composer textarea').inputValue(), (await chat.pane.locator('.attach .att-file').allInnerTexts()).map((x) => x.split('\n')[0])]);
@@ -460,4 +462,22 @@ test('O267 review 15: an Interrupt held while a start sets its model comes back 
   assert.ok((await said(instance, id, 'unheld')).some((e) => e.data.text === 'cut in' && e.data.why === 'stopped'), 'handed back as stopped');
   await until(async () => await box() === JSON.stringify(['cut in', ['keep.txt']]), 'the Interrupt and its file are back in the box');
   console.log('PASS O267 review 15: the stopped Interrupt came back into the box as ' + await box());
+});
+
+// #540 review 16 (O267b): a held message another chat or P9 sent (from) that comes back unsent is told as not sent; only
+// the user's own goes back in the box. Both are written into the ledger as the daemon writes them.
+test('O267b: a handed-back message another chat sent is told as not sent, not put in the box', { timeout: 120000 }, async (t) => {
+  const { instance, id, launch, open, ends } = await setup(t, 'o267b-from');
+  await until(async () => await ends() === 1, 'hello answered');
+  const { page } = await launch(), chat = await open(page);
+  const db = new DatabaseSync(path.join(instance.directory, '.local/state/p9-foundation/p9.db'), { timeout: 5000 });
+  const add = (data) => db.prepare('INSERT INTO events (conversation, type, data, at) VALUES (?, ?, ?, ?)').run(id, 'unheld', JSON.stringify(data), Date.now());
+  add({ id: 'q-other', text: 'from another chat', why: 'stopped', from: 'p9' });
+  add({ id: 'q-mine', text: 'mine', why: 'cancelled' });
+  db.close();
+  const box = () => chat.pane.locator('.composer textarea').inputValue();
+  await until(async () => (await box()).includes('mine'), 'the user\'s own came back into the box');
+  assert.equal(await box(), 'mine', 'the other chat\'s message stayed out of the box');
+  await chat.pane.locator('.hist').getByText('Not sent (stopped): from another chat').waitFor({ timeout: 10000 });
+  console.log('PASS O267b from: the box got only ' + JSON.stringify(await box()) + '; the other chat\'s message was told as not sent');
 });

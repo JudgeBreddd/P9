@@ -547,6 +547,29 @@ test('P18: a message held for the turn comes back to the box when the turn is st
   await page.waitForFunction(() => document.querySelector('#prompt').value === 'keep me' && document.querySelector('#queued').hidden, null, { timeout: 15000 });
   await shot(page, 'p18-kept');
 });
+// #540 review 16 (O267b): only the user's own handed-back message goes back in the box; one another chat or P9 sent (from)
+// stays out. Both are written into the ledger as the daemon writes them.
+test('P18: a handed-back message another chat sent does not go into the box', { timeout: 90000 }, async (t) => {
+  const { page, server } = await phoneOn(t);
+  await newChat(page, 'claude');
+  await send(page, 'short');
+  await page.waitForFunction(() => document.querySelector('#prompt').value === '', null, { timeout: 15000 });
+  const id = (await server.desk('/chat')).body.conversations[0].id;
+  const { DatabaseSync } = await import('node:sqlite');
+  const db = new DatabaseSync(path.join(server.directory, '.local/state/p9-foundation/p9.db'), { timeout: 5000 });
+  const add = (data) => db.prepare('INSERT INTO events (conversation, type, data, at) VALUES (?, ?, ?, ?)').run(id, 'unheld', JSON.stringify(data), Date.now());
+  add({ id: 'q-res', text: 'goes next', why: 'resumed' });
+  add({ id: 'q-rep', text: 'older words', why: 'replaced', from: 'p9' });
+  add({ id: 'q-other', text: 'from another chat', why: 'stopped', from: 'p9' });
+  add({ id: 'q-mine', text: 'mine', why: 'cancelled' });
+  db.close();
+  await page.waitForFunction(() => document.querySelector('#prompt').value.includes('mine'), null, { timeout: 20000 });
+  assert.equal(await page.inputValue('#prompt'), 'mine', 'the other chat\'s message stayed out of the box');
+  // Review round 1 finding 8: told as not sent in the chat, as the window tells it.
+  await page.waitForFunction(() => document.querySelector('#events').textContent.includes('Not sent (stopped): from another chat'), null, { timeout: 15000 });
+  // Review round 2 finding 5: one that resumed or was replaced is not a failure: no "Not sent" line (written before the last).
+  assert.ok(!(await page.textContent('#events')).includes('Not sent (resumed)') && !(await page.textContent('#events')).includes('Not sent (replaced)'));
+});
 // #547 review: a GET /agents that landed after a new chat's start pick was drawn drew the Mode list again as "as set", so
 // the next prompt went without the pick.
 test('O267b: a late GET /agents keeps a new chat\'s start pick, and its prompt goes in it', { timeout: 90000 }, async (t) => {

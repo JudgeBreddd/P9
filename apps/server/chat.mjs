@@ -305,6 +305,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
   };
   const listeners = new Set();
   const stops = new Map(); // conversation -> the Stop in progress
+  const claims = new Map(); // conversation -> the token of the start that set it to 'turn' (prompt, after the note read)
   const failed = new Map(); // conversation -> the adapter whose cleanup could not be confirmed; the next Stop retries it
   // preview: the list's second line for a chat whose events the phone has not read, by its own rule (digest() in phone.ts):
   // the newest prompt or reply, the reply being its run of chunks since the prompt or tool call before it, warnings left
@@ -831,6 +832,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
   // O252's test widens the turn start snapshot's window (test homes only).
   const NOTE_MS = process.env.P9_TEST_HOME && Number(process.env.P9_NOTE_MS) > 0 ? Number(process.env.P9_NOTE_MS) : 0; // tests: widen the note read
   const SHELL_START_MS = process.env.P9_TEST_HOME && Number(process.env.P9_SHELL_START_MS) > 0 ? Number(process.env.P9_SHELL_START_MS) : 0;
+  const SET_CAP_MS = process.env.P9_TEST_HOME && Number(process.env.P9_SET_CAP_MS) > 0 ? Number(process.env.P9_SET_CAP_MS) : 30000; // setOption
   const UNPROMPTED_MARK_MS = process.env.P9_TEST_HOME && Number(process.env.P9_UNPROMPTED_MARK_MS) > 0 ? Number(process.env.P9_UNPROMPTED_MARK_MS) : 300000;
   const quiet = (session, id) => {
     clearTimeout(session.quiet);
@@ -1002,7 +1004,20 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     const send = () => gaveUp ? Promise.reject(new Error('timeout')) : session.agent.setSessionConfigOption({ sessionId: session.sessionId, configId, value }).then(then);
     session.setWaits = (session.setWaits ?? 0) + 1;
     const set = (session.setChain ?? Promise.resolve()).then(send);
-    session.setChain = set.catch(() => {}).finally(() => { session.setWaits -= 1; });
+    // #540 reviews 15 and 16: a set the adapter never answers would hold the chain, and every later prompt is refused ("An
+    // earlier setting has not answered"). Past SET_CAP_MS a mode set not answered retires the session, lock on or off: its
+    // adapter is stopped, even mid-turn, so a late mode answer can never land on a later turn. The chat says it is stopping
+    // it; the stop's own event says how that ended. A model or effort set only frees the chain: the turn runs on.
+    // ponytail: a late model or effort answer can still land on a later turn; only the mode is guarded.
+    let cap;
+    const capped = new Promise((resolve) => { cap = setTimeout(resolve, SET_CAP_MS, 'cap'); });
+    session.setChain = Promise.race([set.catch(() => {}), capped]).then((how) => {
+      clearTimeout(cap);
+      if (how !== 'cap' || live.get(session.id) !== session || session.stopping) return;
+      if (configId !== 'mode') return;
+      emit(session.id, 'error', { message: 'The agent did not answer a setting for ' + Math.round(SET_CAP_MS / 1000) + ' s, so P9 is stopping it.' });
+      stopConversation(session.id);
+    }).finally(() => { session.setWaits -= 1; });
     return ms ? Promise.race([set, wait(ms).then(() => { gaveUp = true; throw new Error('timeout'); })]) : set;
   };
   const setMode = (session, provider, value = modeFor(provider), tell = true, ms) => setOption(session, 'mode', value,
@@ -1578,7 +1593,8 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     return { status: 202, held: item.id, when: mode, ...(body.replaces !== undefined && { replaced: old?.id ?? null }) };
   }
   // Every way a waiting message leaves without being sent passes here, so a waiting question's asker is told here too.
-  const unheld = (id, items, why) => { for (const item of items) { for (const x of [item.id, ...(item.was ?? [])]) emit(id, 'unheld', { id: x, text: item.body.text, why }); solos.get(item.body)?.end({ error: why }); } };
+  // from (#540 review 16): another chat's or P9's message; the window and the phone put only the user's own back in the box.
+  const unheld = (id, items, why) => { for (const item of items) { for (const x of [item.id, ...(item.was ?? [])]) emit(id, 'unheld', { id: x, text: item.body.text, why, ...(senders.has(item.body) && { from: senders.get(item.body) }) }); solos.get(item.body)?.end({ error: why }); } };
   // O188: each chat's count of turns and tool calls started (delegate.mjs: a worker's late wake is cancelled by either).
   const acts = new Map(), act = (id) => acts.set(id, (acts.get(id) ?? 0) + 1);
   function toolStep(id, session, update) {
@@ -1679,7 +1695,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     stop: (id) => stopConversation(id), recovered, remove: (id) => {
       const { usage, unused } = ledger.remove(id);
       db.prepare('DELETE FROM prefs WHERE key IN (?, ?, ?, ?, ?, ?, ?, ?, ?)').run('profile:' + id, 'rules:' + id, 'slot:' + id, 'askable:' + id, 'sprint:' + id, 'start:' + id, 'parked:' + id, 'taken:' + id, 'cut-by:' + id); // O48, A7, daemon-5, O214, O231
-      gauges.delete(id); parked.delete(id);
+      gauges.delete(id); parked.delete(id); claims.delete(id);
       if (attachDir && ID.test(id) && rootOk()) rmSync(path.join(attachDir, id), { recursive: true, force: true }); // A2 step 1: this chat's folder only
       if (imageDir) for (const hash of unused) if (/^[0-9a-f]{64}$/.test(hash)) for (const ext of new Set(Object.values(EXT))) rmSync(path.join(imageDir, hash + ext), { force: true });
       return usage;
@@ -1939,6 +1955,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
         if (!['idle', 'running', 'stopped'].includes(row(id).state)) { release(); return refused(409, row(id).state); }
       }
       setState(id, 'turn');
+      const claim = randomUUID(); claims.set(id, claim);
       // O10: and the failed Send to remote's note, which a command does not carry or use up (its user event says command).
       const note = [movedNote(db, id), bare ? null : failedMoveNote(db, id)].filter(Boolean).join('') || null; // read before this message's own user event
       // N1: the project's instructions and added files, when this chat has not been sent this exact text since its last
@@ -1947,7 +1964,12 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       const project = bare ? null : await projects.note(conversation).catch(() => null);
       if (NOTE_MS) await wait(NOTE_MS);
       // O141 review 3: a Stop (Close stops every chat of its sprint) that came while the note was read wins: nothing starts.
-      if (stops.has(id) || ['stopping', 'stopped'].includes(row(id)?.state)) { release(); return refused(409, 'stopping'); }
+      // #542 round 4: so does one that ended cleanup-failed meanwhile (out of stops already): anything but this prompt's own
+      // 'turn' means its claim is gone, and connect() would start a second adapter beside one that may still live. Its own:
+      // a newer prompt that claimed the chat after a Stop meanwhile has its own token.
+      const now = row(id)?.state, mine = claims.get(id) === claim;
+      if (mine) claims.delete(id); // checked once; a newer start's token is its own
+      if (stops.has(id) || now !== 'turn' || !mine) { release(); return refused(409, now === 'cleanup-failed' || now === 'moving' || now === 'moved' ? now : 'stopping'); }
       const lastNote = project && db.prepare("SELECT data ->> '$.projectNote' AS hash FROM events WHERE conversation = ? AND type = 'user' AND json_valid(data) AND data ->> '$.steered' IS NULL ORDER BY cursor DESC LIMIT 1").get(id)?.hash;
       const projectText = project?.text && project.hash !== lastNote ? project.text : null;
       const rules = bare ? null : rulesFor(conversation, body);
@@ -1964,7 +1986,21 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       // #540 review 14: a start the chat's close, Stop or exit ended has no turn end to settle what it carried, so this exit
       // drains it: drain hands each one back as stopped (and keeps what P9's own shutdown keeps), as a stopped turn's end does.
       const gone = () => live.get(id) !== session || session.stopping;
-      const startFailed = () => { if (!gone()) setState(id, 'running'); if (gone() ? session.held.length + session.queued.length : session.queued.some((x) => nows.has(x.body))) queueMicrotask(() => drain(id, session)); }; // after this start's own error event
+      // O267b: a setting that failed because the adapter exited fails before the exit is heard (its connection closes first).
+      // With a message held for this start, the start keeps the chat (still 'turn': a new prompt waits) for a short grace: if
+      // the connection closed, it waits for the exit, which hands the held message back. Then, in one step, the chat is free
+      // again and its drain runs. With nothing held the chat is free at once.
+      // ponytail: a live adapter's failed start sends its held Interrupt 100 ms later; an exit over 5 s after the close still races.
+      const waiting = () => (gone() ? session.held.length + session.queued.length : session.queued.some((x) => nows.has(x.body)));
+      const startFailed = () => {
+        if (!waiting()) { if (!gone()) setState(id, 'running'); return; }
+        Promise.race([(session.agent.closed ?? new Promise(() => {})).then(() => true), wait(100).then(() => false)])
+          .then((closed) => closed && Promise.race([session.exited, wait(5000)]))
+          .then(() => { // after this start's own error event
+            if (!gone()) setState(id, 'running');
+            if (waiting()) drain(id, session);
+          });
+      };
       let begun = false;
       try {
         if (session.stopping) return refused(409, 'stopping');
@@ -2054,7 +2090,28 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
         if (content?.length && session.turn === turn && live.get(id) === session) emit(id, 'update', { sessionUpdate: 'tool_call', toolCallId: 'p9-shell-' + turn, title: 'Shell edits', kind: 'edit', status: 'completed', content, locations: content.map((c) => ({ path: c.path })) });
       });
       // The snapshot is taken before the prompt goes, so the agent's first write is never in it.
-      new Promise((resolve) => resolve(shellFrom.then(() => (session.cut === turn ? { stopReason: 'cancelled' } : (session.heard?.forEach((m) => { m.copied = true; }), session.agent.prompt({ sessionId: session.sessionId, prompt })))))).then(
+      // #540 review 15: the last check before the prompt goes, after the snapshot (the start's own checks ran before it). A
+      // Stop meanwhile sends nothing; a chat stopped, closed or exited meanwhile sends nothing (the failure path below, quiet
+      // once stopping), nor does a device revoked meanwhile.
+      // Review round 2 finding 3: after the 202 the box is empty, so the revoked device's message is handed back (its text
+      // into the box, as a stopped start's held one) and the chat says so once (told: the failure path below says nothing
+      // more). The error line ends the turn in the window and the phone (an unheld does not), so it goes for every message.
+      // ponytail: the 202 cleared its files from the box too and only the text comes back, so the line asks for them again.
+      // ponytail: another chat's message (from) shows two notices, its "Not sent" line and this error; one would be enough.
+      const handBack = (message) => {
+        emit(id, 'unheld', { id: turn, text: body.text, why: 'stopped', ...(senders.has(body) && { from: senders.get(body) }) });
+        emit(id, 'error', { message: message + (images?.length ? ' Attach its files again.' : ''), ends: true });
+        throw Object.assign(new Error(message), { told: true });
+      };
+      const dispatch = async () => {
+        await shellFrom;
+        if (session.cut === turn) return { stopReason: 'cancelled' };
+        if (gone()) throw new Error('stopping');
+        try { stillAuthorized(); } catch { handBack('This device was signed out; nothing was sent.'); }
+        session.heard?.forEach((m) => { m.copied = true; });
+        return session.agent.prompt({ sessionId: session.sessionId, prompt });
+      };
+      dispatch().then(
         (result) => shellEdits().then(() => result), (error) => shellEdits().then(() => { throw error; }),
       ).then(
         done,
@@ -2068,7 +2125,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
           untake(id, turn); // O214: a failed turn is not a message that arrived
           if (cutLine && !keptPref('cut-by:' + id)) cutBy(id, cutLine); // not read: the next prompt says it
           if (session.turn === turn) for (const hook of turnFailedHooks) { try { hook(id, turn, Boolean(solo)); } catch {} }
-          if (rules?.started) startLost(id); for (const n of told) if (!resent.has(n)) { resent.add(n); park(id, n, true); } if (session.turn === turn && !session.stopping) emit(id, 'error', { message: profileError(error, session), ends: true }); },
+          if (rules?.started) startLost(id); for (const n of told) if (!resent.has(n)) { resent.add(n); park(id, n, true); } if (session.turn === turn && !session.stopping && !error?.told) emit(id, 'error', { message: profileError(error, session), ends: true }); },
       ).finally(() => {
         if (session.turn !== turn) return;
         session.turn = null; session.turnEdits = null;
@@ -2262,7 +2319,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       if (!list) return [];
       db.exec('BEGIN');
       try { if (into) setPaused(lead, [...list, ...into].sort((a, b) => (a.seq ?? 0) - (b.seq ?? 0))); setPaused(worker, null); db.exec('COMMIT'); } catch (error) { db.exec('ROLLBACK'); throw error; }
-      if (!into) for (const item of list) for (const shown of item.held ?? [item.id]) emit(item.chat, 'unheld', { id: shown, text: item.body.text, why: 'stopped' });
+      if (!into) for (const item of list) for (const shown of item.held ?? [item.id]) emit(item.chat, 'unheld', { id: shown, text: item.body.text, why: 'stopped', ...(item.from && { from: item.from }) });
       wakeAll('resumed');
       return into ? [] : list;
     },
