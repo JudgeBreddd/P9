@@ -570,6 +570,34 @@ test('P18: a handed-back message another chat sent does not go into the box', { 
   // Review round 2 finding 5: one that resumed or was replaced is not a failure: no "Not sent" line (written before the last).
   assert.ok(!(await page.textContent('#events')).includes('Not sent (resumed)') && !(await page.textContent('#events')).includes('Not sent (replaced)'));
 });
+// #547 review: a GET /agents that landed after a new chat's start pick was drawn drew the Mode list again as "as set", so
+// the next prompt went without the pick.
+test('O267b: a late GET /agents keeps a new chat\'s start pick, and its prompt goes in it', { timeout: 90000 }, async (t) => {
+  const { page } = await phoneOn(t);
+  let reads = 0, release; const held = new Promise((resolve) => { release = resolve; });
+  await page.route((url) => url.pathname === '/agents', async (route) => { if (++reads > 1) await held; return route.continue(); }); // the page's first read answers; the next ones wait
+  await page.evaluate(() => localStorage.setItem('p9-mode:claude', 'Plan'));
+  const first = page.waitForResponse((r) => new URL(r.url()).pathname === '/agents');
+  await page.reload(); await first;
+  await newChat(page, 'claude');
+  assert.equal(await page.inputValue('#mode'), 'Plan', 'the new chat starts in the last pick');
+  assert.ok(reads > 1, 'a GET /agents is still on its way');
+  await page.evaluate(() => { window.modeDraws = 0; new MutationObserver(() => window.modeDraws++).observe(document.querySelector('#mode'), { childList: true }); });
+  release();
+  await page.waitForFunction(() => window.modeDraws > 0, null, { timeout: 10000 }); // the late answer drew the Mode list again
+  assert.equal(await page.inputValue('#mode'), 'Plan', 'still the pick after the redraw');
+  await send(page, 'mode');
+  await said(page, 'mode:plan');
+});
+// #547 review: a malformed GET /agents answer replaced the agents' names before it was found malformed.
+test('O267b: a malformed GET /agents answer keeps the names there are', { timeout: 90000 }, async (t) => {
+  const { page } = await phoneOn(t);
+  await page.route((url) => url.pathname === '/agents', (route) => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ agents: [{ id: 'claude', name: 'Broken', modes: 'not a list' }] }) }));
+  const answered = page.waitForResponse((r) => new URL(r.url()).pathname === '/agents');
+  await page.reload(); await answered;
+  await newChat(page, 'claude');
+  assert.equal(await page.getAttribute('#prompt', 'placeholder'), 'Message Claude');
+});
 test('P4: the message box is one line empty, grows to six, then scrolls; 16 px text', { timeout: 60000 }, async (t) => {
   const { page } = await phoneOn(t);
   await newChat(page, 'claude');
@@ -969,6 +997,29 @@ test('USE-1 web on the phone: Usage draws one plan card per agent in the usage l
   assert.deepEqual(await read(), [['Claude plan', 'Last read just now · shared plan with <i>Kes</i>', false], ['Codex plan', 'Codex not logged in', true],
     ['<i>Kes</i> plan', 'Last read 20 min ago · shared plan with Claude', true]]);
   assert.equal(await page.locator('#usage i:text-is("Kes")').count(), 0, 'the name is text, not markup');
+});
+// #547 review 3: the agents' names arriving drew the plan cards again from the last read even after a newer read failed,
+// so the cards came back over its "Usage unavailable".
+test('USE-1 web on the phone: names arriving after a failed Usage read leave "Usage unavailable" up', { timeout: 90000 }, async (t) => {
+  const { page } = await phoneOn(t);
+  const [agents, usage] = await page.evaluate(() => Promise.all(['/agents', '/usage'].map((p) => fetch(p).then((r) => r.json()))));
+  usage.limits = { claude: { asOf: Date.now(), fiveHour: { usedPercent: 40, resetsAt: Date.now() + 3600000, windowMins: 300 }, sevenDay: null, stale: false }, codex: null };
+  let release, asked = 0; const held = new Promise((r) => { release = r; }); t.after(() => release());
+  await page.route('**/agents', async (route) => { asked ||= Date.now(); await held; await route.fulfill({ json: agents }).catch(() => {}); });
+  let fail = false; // reads answer until the refresh below, which fails
+  await page.route('**/usage', (route) => (fail ? route.abort() : route.fulfill({ json: usage })));
+  await page.reload(); await page.locator('#newChat').waitFor();
+  await page.click('[data-nav="usage"]');
+  await page.waitForSelector('#usage [data-limits]', { timeout: 5000 }); // the first read drew
+  fail = true; await page.click('#refreshUsage');
+  await page.waitForSelector('#usage h2:text-is("Usage unavailable")', { timeout: 5000 }); // the second failed
+  assert.ok(asked && Date.now() - asked < 10000, 'the held GET /agents is let go well before its 20 s deadline');
+  // An applied catalog draws the Chats picker again (phone.ts readChat), after the Usage cards: that redraw is the signal.
+  await page.evaluate(() => { window.pickerDraws = 0; new MutationObserver(() => window.pickerDraws++).observe(document.querySelector('#conversation'), { childList: true }); });
+  release();
+  await page.waitForFunction(() => window.pickerDraws > 0, null, { timeout: 5000 });
+  assert.equal(await page.locator('#usage h2:text-is("Usage unavailable")').count(), 1, 'the failure is still shown');
+  assert.equal(await page.locator('#usage [data-limits]').count(), 0, 'no cards from the older read');
 });
 test('O48 on the phone: New chat lists each provider profile\'s models; the chat it starts is on that profile and model; the phone reads id, name and model names only', { timeout: 90000 }, async (t) => {
   const { page, server, session } = await phoneOn(t);

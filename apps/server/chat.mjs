@@ -471,7 +471,8 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
   // (copied, at the send below): output that matches a reply from before that prompt is kept. A steer goes through
   // _session/steering, not a prompt, so the turn it joins keeps its copy rule.
   // Review 7: the uuid rule is claude-agent-acp's (its fallback is where the copies come from; RESULT_COPY, agents.mjs);
-  // another agent's uuid reply that opens with the same words is its own.
+  // for another agent a uuid reply that opens with the same words is not taken for a short copy (the same-id and
+  // 200-character rules still apply to it).
   // ponytail: the last 20 replies of this run of the agent, in memory; a copy that comes after a restart, of an older
   // reply, or of a short reply under an id that is not a uuid or more than COPY_MS later is recorded.
   const COPY_MS = 5000, UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
