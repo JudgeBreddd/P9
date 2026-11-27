@@ -130,8 +130,12 @@ test('Pause sprint: a paused sprint\'s workers start no turn for what agents sen
   assert.equal((await call(instance, '/projects/' + project)).body.project.sprints.find((s) => s.lead === sprint).paused, undefined);
   assert.deepEqual((await call(instance, `/sprints/${sprint}/resume`, 'POST', {})).body, { paused: false, already: true });
 
-  // The lead's own tools from here (its old MCP client went with the restart).
-  await call(instance, `/chat/${sprint}/prompt`, 'POST', { text: 'mcp' });
+  // The lead's own tools from here (its old MCP client went with the restart). O271: this restart is P9's second start, so
+  // a chat it cut mid-turn gets the lead a restart line and a turn; a plain 'mcp' that met it was steered in and never
+  // answered 'mcp:'. Queued, it waits for that turn; a 409 (still starting or stopping) is tried again.
+  let handshake;
+  for (let i = 0; i < 100 && (handshake = await call(instance, `/chat/${sprint}/prompt`, 'POST', { text: 'mcp', when: 'queue' })).status === 409; i += 1) await pause(100);
+  assert.ok([200, 202].includes(handshake.status), JSON.stringify([handshake.status, handshake.body]));
   let again = await attach(t, instance, sprint, mark);
   const isPaused = async () => !!(await rows(instance)).find((c) => c.id === sprint).paused;
   const approvals = async () => (await events(instance, sprint)).filter((e) => e.type === 'approval');

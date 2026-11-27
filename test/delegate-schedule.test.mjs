@@ -34,7 +34,11 @@ test('O140: a scheduled prompt fires at its time and every minute, across a daem
   assert.equal(await sent('single'), 1, 'the once prompt did not go exactly once');
   // Its old MCP client went with the restart: a new one from a fresh 'mcp' message.
   const fresh = (await call(instance, '/chat/events?after=0')).body.cursor;
-  await call(instance, `/chat/${a.conversation}/prompt`, 'POST', { text: 'mcp' });
+  // O271: the third tick's user event is seen before its turn ends; a plain 'mcp' that met that turn was steered in and
+  // never answered 'mcp:'. Queued, it waits for the turn's end; a 409 (still starting or stopping) is tried again.
+  let asked;
+  for (let i = 0; i < 100 && (asked = await call(instance, `/chat/${a.conversation}/prompt`, 'POST', { text: 'mcp', when: 'queue' })).status === 409; i += 1) await pause(100);
+  assert.ok([200, 202].includes(asked.status), JSON.stringify([asked.status, asked.body]));
   a = await connect(t, instance, a.conversation, fresh);
   const kept = (await a.tool('list_schedules')).schedules;
   assert.deepEqual(kept.map((s) => [s.id, s.everyMinutes, s.paused]), [[tick.id, 1, false]], 'the once prompt is still listed, or the recurring one is gone');
