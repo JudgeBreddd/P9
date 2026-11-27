@@ -873,13 +873,16 @@ export function createDelegate({ chat, allowed, usage }) {
   }
   // O243: the third fix asks the lead for a step up from the model the worker runs on (its live session's, else its newest
   // config's, as send_chat reads it): only the larger families, nothing about models on Fable, and a plain "a larger
-  // model" for any other name (default, opusplan, a profile's or another agent's model, none read yet). A family is read
-  // only from the forms P9 stores: a bare alias or a claude-<family>-... id, either with an optional [1m].
+  // model" for any other name (default, opusplan, none read yet). The ladder is only for a plain Claude chat (provider
+  // claude, no profile): a profile may name its model fable while that routes to a smaller one, and another agent's models
+  // are not on it, so those get the plain notice. A family is read only from the forms P9 stores: a bare alias or a
+  // claude-<family>-... id, either with an optional [1m].
   // ponytail: no cloud prefix (us.anthropic., an ARN) is read; no adapter P9 runs reports one, and such a name gets the plain notice.
   const LADDER = ['haiku', 'sonnet', 'opus', 'fable'], OR = new Intl.ListFormat('en', { type: 'disjunction' });
   const FAMILY = /^(?:claude-(haiku|sonnet|opus|fable)(?:-[a-z0-9.-]+)?|(haiku|sonnet|opus|fable))(?:\[1m\])?$/;
   const thirdFix = (item, worker) => {
-    const model = String(chat.info?.(worker.id)?.model ?? chat.gauge?.(worker.id)?.model ?? '').toLowerCase();
+    const c = chat.info?.(worker.id), plain = c?.provider === 'claude' && !c.profile;
+    const model = plain ? String(c.model ?? chat.gauge?.(worker.id)?.model ?? '').toLowerCase() : '';
     const m = FAMILY.exec(model), at = LADDER.indexOf(m?.[1] ?? m?.[2]), up = LADDER.slice(at + 1).map((f) => f[0].toUpperCase() + f.slice(1));
     return `[p9] ${item} by ${worker.title} got its third fix` + (at < 0 ? ': give the correction to a larger model.' : up.length ? `: give the correction to a larger model (${OR.format(up)}).` : '.');
   };

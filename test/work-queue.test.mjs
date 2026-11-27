@@ -108,8 +108,8 @@ test('Work queue: ready takes the first item not passed, wakes the reviewer, ver
 
 // O243: the third-fix notice names only a step up from the model the worker runs on, in a sprint and outside one.
 test('O243: the third fix asks for a step up from the worker\'s model: Fable only from Opus, no model advice on Fable', () => {
-  const ask = (model, sprint, gauged) => {
-    const family = [{ id: lead }, { id: worker, parent: lead, key: 'daemon', title: 'Daemon', model }, { id: reviewer, project: 'p' }].map((c) => ({ project: 'p', ...c }));
+  const ask = (model, sprint, gauged, runs = { provider: 'claude', profile: null }) => {
+    const family = [{ id: lead }, { id: worker, parent: lead, key: 'daemon', title: 'Daemon', model, ...runs }, { id: reviewer, project: 'p' }].map((c) => ({ project: 'p', ...c }));
     const states = new Map([[worker, { ready: { commit: 'c4', item: 'daemon-1' }, reviews: { 'daemon-1': { state: 'fix', commit: 'c3', fixes: 2 } } }]]), sent = [];
     const chat = { lock: () => ({ on: false }), info: (id) => family.find((c) => c.id === id), family: () => family, list: () => family,
       sprint: (id) => states.get(id) ?? {}, setSprint: (id, patch) => states.set(id, { ...states.get(id), ...patch }), gauge: () => ({ model: gauged ?? null }),
@@ -130,6 +130,10 @@ test('O243: the third fix asks for a step up from the worker\'s model: Fable onl
     assert.deepEqual(ask('claude-opus-5-5', sprint), ['[p9] daemon-1 by Daemon got its third fix: give the correction to a larger model (Fable).']);
     assert.deepEqual(ask('opus[1m]', sprint), ['[p9] daemon-1 by Daemon got its third fix: give the correction to a larger model (Fable).']);
     for (const name of ['fable-proxy/small', 'opusplan']) assert.deepEqual(ask(name, sprint), ['[p9] daemon-1 by Daemon got its third fix: give the correction to a larger model.'], name);
+    // The ladder is a plain Claude chat's only: a profile's fable or opus may route to a smaller model, another agent's is off it.
+    const profile = { provider: 'claude', profile: { id: 'p1', name: 'Proxy', model: 'fable', gone: false } };
+    for (const [name, runs, gauged] of [['fable', profile], ['opus', profile], [null, profile, 'fable'], ['opus', { provider: 'codex', profile: null }]])
+      assert.deepEqual(ask(name, sprint, gauged, runs), ['[p9] daemon-1 by Daemon got its third fix: give the correction to a larger model.'], `${name ?? gauged} on ${runs.profile ? 'a profile' : runs.provider}`);
   }
   console.log('PASS O243: third fix names only a step up');
 });
