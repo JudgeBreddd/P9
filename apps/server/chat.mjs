@@ -1543,8 +1543,9 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     // can keep the permissions a turn started with (Codex does), so a steer would run writable in a turn begun unlocked.
     // Round 4: refused, it still declines an open question as a steer does, or a turn waiting on the owner would hold
     // the message behind it for good.
-    if (locked || admit(session)) { stillAuthorized(); decline(id, session, body); return refused(409, 'turn-running'); }
+    // Round 5: a photo this agent cannot take is refused first, so it never cancels the open question on its way out.
     if (photos(images).length && !session.capabilities.promptCapabilities?.image) return refused(400, 'images-unsupported');
+    if (locked || admit(session)) { stillAuthorized(); decline(id, session, body); return refused(409, 'turn-running'); }
     stillAuthorized();
     decline(id, session, body);
     // Codex has no promptRequired and answers startedNewTurn when the turn ended meanwhile; the message is delivered,
