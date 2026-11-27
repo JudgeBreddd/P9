@@ -1358,7 +1358,8 @@ async function loadChat() {
     // Settings or the New menu open while the lists were read: the Default model and effort rows, and the menu's rows, fill in.
     if (outer.$('#setDlg')?.open) outer.refreshDefaults();
   };
-  const list = async () => { let l; while ((l = await window.p9.chat('list', {})).status !== 200 && !outer.lifetime.signal.aborted) await new Promise(res => outer.setTimeout(res, 2000)); await loadAgents(); lists(l.body); await outer.loadProfiles(); await outer.loadStarts(); return l.body?.conversations || []; };
+  // O259: the remote answering for the first time (shell-start.ts p9:remote-up) asks again at once, not at the next 2 s.
+  const list = async () => { let l; while ((l = await window.p9.chat('list', {})).status !== 200 && !outer.lifetime.signal.aborted) await new Promise(res => { outer.setTimeout(res, 2000); addEventListener('p9:remote-up', res, { once: true, signal: AbortSignal.timeout(2000) }); }); await loadAgents(); lists(l.body); await outer.loadProfiles(); await outer.loadStarts(); return l.body?.conversations || []; };
   let sprintStale = false, sprintAt = 0;
   // The sessions from the list, once caught up: a chat not held here comes as a stub, and each one's archive, project and
   // sprint fields come from the list. After the launch's replay, and after a jump (O251), whose skipped events made chats too.

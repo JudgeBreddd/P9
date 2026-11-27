@@ -162,7 +162,8 @@ export function startShell() {
       // Remote mode asks every 5 s even when connected: a lost tunnel shows here, and main connects again on its own.
       if (result.mode === 'server') {
         // D20: the full connecting layer only while this window has never shown this remote. A window that loaded before it
-        // answered loads once more, so its chats and Mission Control come from the remote. After that a slow or failed poll
+        // answered reads again in place what it could not read then (O259, p9:remote-up in controller.mjs; it reloaded itself
+        // before, so the empty shell and a second full load showed after the layer). After that a slow or failed poll
         // (a slow network, the tunnel rebuilt) shows nothing: main reconnects on its own, and only what the user does waits
         // where they did it (a send's working row, a page's Loading).
         const layer = document.getElementById('connecting') as HTMLDialogElement | null, ok = result.status === 'ok', known = shown === result.host;
@@ -199,7 +200,7 @@ export function startShell() {
           // After the layer opens, so the password window sits on top of it.
           if (result.sshAsk && result.sshAsk.id !== sshAsked) { sshAsked = result.sshAsk.id; askSsh(host, result.sshAsk); }
         }
-        if (ok && waited && !connected) return location.reload();
+        if (ok && waited && !connected) dispatchEvent(new Event('p9:remote-up'));
         if (ok) { connected = true; shown = result.host ?? ''; if (layer?.open) layer.close(); } else waited = true;
         if (label && (ok || !known)) {
           label.textContent = result.status === 'ok' ? 'Connected to ' + result.host : (REMOTE_WHY[result.error ?? ''] ?? 'Remote unavailable (' + result.error + ')');
