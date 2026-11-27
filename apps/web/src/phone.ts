@@ -1320,7 +1320,7 @@ async function submitFromBox(event: Event) {
   // answers it. Which submission it is comes only from what the user did (text, attachments, the pickers they touched), never from the
   // wire body: that is rebuilt from the screen, and the turn or the adapter's own config may have changed it since.
   const picked = new Map([...chosen.get(id) ?? []].map(([key, pick]) => [key, pick.value])); // what goes with this send; a pick made while it is on its way is the next message's
-  const draft = JSON.stringify([text, images.map((image) => image.data.length + ':' + image.data.slice(-64)), chosenKey(id)]); // O62: an image by its size and end, so the record fits storage
+  const draft = JSON.stringify([text, images.map(print), chosenKey(id)]); // O62: an image by its size and end, so the record fits storage
   if (inFlight.get(id)?.draft !== draft) inFlight.delete(id);
   const again = inFlight.has(id);
   // O206, O209: which picks this send carries, each by its pid. A retry is the first try again, so it carries the first try's picks, not
@@ -1357,7 +1357,7 @@ async function submitFromBox(event: Event) {
   // A send of only files (a big paste is one, as pasted.txt) leaves the box alone: what was typed while it was on its way stays as it is.
   // O61, O62: the sent text leaves its own chat's box (the reader may be in another chat by now), and the picks that went with it
   // are no longer unsent: what the agent reports is the setting again.
-  if (result.status === 202) { spend(id, picked); if (art === null) { if (typed) editDraft(id, withoutSent); dropQuotes(id, qs); const left = (attached.get(id) ?? []).filter((image) => !images.includes(image)); if (left.length) attached.set(id, left); else attached.delete(id); } label(); note(); renderAttached(); void fetchEvents().then(render, () => {}); return true; } // the read is not awaited: the guard releases when the send is settled
+  if (result.status === 202) { spend(id, picked); if (art === null) { if (typed) editDraft(id, withoutSent); dropQuotes(id, qs); markSent(id, images); const left = (attached.get(id) ?? []).filter((image) => !images.includes(image)); if (left.length) attached.set(id, left); else attached.delete(id); } label(); note(); renderAttached(); void fetchEvents().then(render, () => {}); return true; } // the read is not awaited: the guard releases when the send is settled
   // Refused mid-turn (the agent takes no steering, or the turn is stopping or just ended): the message waits for the turn's end in the
   // phone's own queue, as the desktop does, and the box empties. Attachments do not queue, so they stay and the box says why.
   else if (result.status === 409 && result.body.error === 'turn-running' && art === null) {
@@ -1514,8 +1514,19 @@ function commentOnSelection() {
   import('./quote.mjs').then((m) => { const alive = quoteAlive(id); if (alive()) m.commentButton({ range: copy, raw, view: body, alive, pick: (rect: DOMRect) => openQuote(id, rect, text, raw, key) }); }, () => {});
 }
 let attachedRead = false; // until the kept images are read back, a redraw must not overwrite them with none
-function keepAttached() { if (!attachedRead) return; try { attachedStore('readwrite', (store) => { store.clear(); for (const [id, list] of attached) if (list.length) store.put(list, id); }); } catch {} }
-try { attachedStore('readonly', (store) => { const all = store.openCursor(); all.onerror = () => { attachedRead = true; }; all.onsuccess = () => { const at = all.result; if (!at) { attachedRead = true; return renderAttached(); } if (!attached.has(String(at.key))) attached.set(String(at.key), at.value as Attached[]); at.continue(); }; }); } catch {}
+// O264: the store's rewrite after an accepted send is not waited for, so a page killed before it lands brought the sent files back
+// on reload, and send sent them again. The sent files (per chat, by size and end) are kept in localStorage first, which is
+// synchronous; a launch leaves them out, and the first rewrite made after them that lands forgets them.
+const SENT = 'p9-attached-sent', print = (image: Attached) => image.data.length + ':' + image.data.slice(-64);
+const sentFiles = (): Record<string, string[]> => { try { return JSON.parse(localStorage.getItem(SENT) ?? '{}') ?? {}; } catch { return {}; } };
+function markSent(id: string, images: Attached[]) {
+  if (!images.length) return; const all = sentFiles(); all[id] = [...all[id] ?? [], ...images.map(print)];
+  try { localStorage.setItem(SENT, JSON.stringify(all)); } catch {} // storage full: as before, only the rewrite drops them
+}
+function keepAttached() { if (!attachedRead) return; try { attachedStore('readwrite', (store) => { const sent = localStorage.getItem(SENT); store.clear(); for (const [id, list] of attached) if (list.length) store.put(list, id);
+  if (sent) store.transaction.addEventListener('complete', () => { if (localStorage.getItem(SENT) === sent) localStorage.removeItem(SENT); }); }); } catch {} } // a send since then keeps its own
+try { const sent = sentFiles(); attachedStore('readonly', (store) => { const all = store.openCursor(); all.onerror = () => { attachedRead = true; }; all.onsuccess = () => { const at = all.result; if (!at) { attachedRead = true; return renderAttached(); }
+  const id = String(at.key), list = (at.value as Attached[]).filter((image) => !sent[id]?.includes(print(image))); if (!attached.has(id) && list.length) attached.set(id, list); at.continue(); }; }); } catch {}
 const chipName = (q: Quote) => q.comment ? escape(q.comment.slice(0, 60)) : `“${escape(q.text.replace(/\s+/g, ' ').trim().slice(0, 40))}”`;
 // The chips' HTML as last drawn: a redraw that changes nothing keeps the buttons, so a tap or the focus on one is not lost.
 let attachedHtml = '';
