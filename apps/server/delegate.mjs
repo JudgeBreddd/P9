@@ -1112,7 +1112,7 @@ export function createDelegate({ chat, allowed, usage }) {
     // idle or waiting on an answer still holds its place and is never refused here.
     const place = target.parent && ['stopped', 'moved'].includes(target.state) ? take(target.parent, args.chat) : null;
     if (place?.error) { if (told) chat.rekey(args.chat, target.key ?? null); return place; }
-    const sent = await chat.prompt(args.chat, { text: told + args.text, mode: picked.mode, ...re, ...(args.when && args.when !== 'auto' && { when: args.when }), ...(args.replaces !== undefined && { replaces: args.replaces }) }, undefined, caller).finally(() => place?.release());
+    const sent = await chat.prompt(args.chat, { text: args.text, ...(told && { notice: told }), mode: picked.mode, ...re, ...(args.when && args.when !== 'auto' && { when: args.when }), ...(args.replaces !== undefined && { replaces: args.replaces }) }, undefined, caller).finally(() => place?.release());
     // A message not taken puts the old key back, so a retry re-keys and the notice still goes out with it.
     if (sent.status !== 202 && told) chat.rekey(args.chat, target.key ?? null);
     if (sent.status !== 202) return { error: 'chat-not-sendable', reason: sent.error, state: stateOf(chat.info(args.chat)), ...(sent.error === 'turn-running' && { detail: 'It cannot take a message now: a run it started itself, or a Stop ending its turn. Send it again once that ends.' }) };

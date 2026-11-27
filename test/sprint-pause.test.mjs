@@ -428,3 +428,45 @@ test('O267b: held workers past 200 rows are listed; a paused Close keeps the kep
   assert.deepEqual(keptOf(sprint).map((i) => i.body.text), ['legacy-0', early, late, 'order-3'], 'Close merged the kept lists out of order');
   console.log('PASS O267b: held past 200 listed, not counted in more; paused Close keeps the kept order, ties included');
 });
+
+// O246 round 2: messages from different senders go one prompt each, so a paused worker's turn end can keep the first (an
+// agent's, for Resume) and start no turn. The owner's message behind it goes then, not at Resume.
+// Round 3: with the held list full, the lead's is refused and only it; the owner's still goes.
+const pausedTurnEnd = async (t, full) => {
+  const instance = await daemon(t, undefined, false, async () => ({ args: ['--acp-override', fake] }));
+  const ws = instance.workspace, repo = path.join(ws, 'repo');
+  fs.mkdirSync(repo); g(repo, 'init', '-q', '-b', 'main'); fs.writeFileSync(path.join(repo, 'a.txt'), 'a\n'); g(repo, 'add', 'a.txt'); g(repo, 'commit', '-qm', 'a');
+  await call(instance, '/file-protection', 'POST', { on: false });
+  const project = (await call(instance, '/projects', 'POST', { name: 'Fresh', work: { kind: 'new', parent: '', name: 'fresh' } })).body.project.id;
+  const first = (await call(instance, '/chat', 'POST', { provider: 'claude', project })).body.conversation;
+  await call(instance, `/chat/${first}/prompt`, 'POST', { text: 'config' });
+  await until(instance, (e) => e.conversation === first && e.data?.content?.text?.startsWith('config:'));
+  const prep = (await call(instance, '/projects/' + project + '/sprints', 'POST', { title: 'P1' })).body, sprint = prep.sprint;
+  fs.writeFileSync(path.join(prep.folder, 'roles.json'), JSON.stringify({ folder: 'repo', roles: [{ key: 'lead', provider: 'claude', model: 'opus', effort: 'high' }, { key: 'w1', provider: 'claude', model: 'haiku', effort: 'low' }] }));
+  for (const key of ['lead', 'w1']) fs.writeFileSync(path.join(prep.folder, `roles/${key}.work.md`), 'mcp');
+  const press = await call(instance, `/sprints/${sprint}/start`, 'POST', {});
+  assert.equal(press.status, 200, JSON.stringify(press.body));
+  const w1 = press.body.chats.find((c) => c.key === 'w1').chat, lead = await attach(t, instance, sprint);
+  for (;;) { if (!(await lead.tool('wait_chat', { chat: w1 })).timedOut) break; }
+  let mark = await cursor(instance);
+  // A turn that runs until told; the lead's message, then the owner's, wait for its end; then the owner pauses the sprint.
+  await call(instance, `/chat/${w1}/prompt`, 'POST', { text: 'gate' });
+  await until(instance, (e) => e.conversation === w1 && e.data?.content?.text === 'gating', mark);
+  assert.ok((await lead.tool('send_chat', { chat: w1, text: 'lead-first', when: 'queue' })).held);
+  assert.equal((await call(instance, `/chat/${w1}/prompt`, 'POST', { text: 'owner-second', when: 'queue' })).status, 202);
+  assert.equal((await call(instance, `/sprints/${sprint}/pause`, 'POST', {})).status, 200);
+  if (full) for (let i = 0; i < 100; i += 1) assert.ok((await lead.tool('send_chat', { chat: w1, text: 'cap-' + i })).held, 'message ' + i + ' was not kept');
+  mark = await cursor(instance);
+  fs.writeFileSync(path.join(ws, 'go'), ''); // the fake agent runs in the workspace
+  const got = async (text) => (await events(instance, w1)).some((e) => e.cursor > mark && e.data?.content?.text === 'echo:' + text);
+  for (let i = 0; i < 60 && !(await got('owner-second')); i += 1) await pause(250);
+  assert.ok(await got('owner-second'), 'the owner\'s message waited behind the kept one for Resume');
+  assert.equal(await got('lead-first'), false, 'the lead\'s message ran while the sprint was paused');
+  if (full) return; // refused by name to its sender (sprint-paused-full); the 100 kept go at Resume, as the cap test shows
+  // Kept, not lost: Resume sends it.
+  assert.deepEqual((await call(instance, `/sprints/${sprint}/resume`, 'POST', {})).body, { paused: false, sent: 1 });
+  for (let i = 0; i < 60 && !(await got('lead-first')); i += 1) await pause(250);
+  assert.ok(await got('lead-first'), 'Resume did not send the kept message');
+};
+test('O246: a paused worker\'s turn ends with the lead\'s message first and the owner\'s next: the lead\'s is kept for Resume, the owner\'s goes at once', { timeout: 180000 }, (t) => pausedTurnEnd(t, false));
+test('O246: a paused worker\'s turn ends with its held list full: the lead\'s message is refused, the owner\'s behind it still goes', { timeout: 240000 }, (t) => pausedTurnEnd(t, true));

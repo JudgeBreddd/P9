@@ -63,9 +63,10 @@ test('A2 step 3: a queued message edited before a daemon restart goes once after
 });
 
 // O125 point 5: a lead busy in a turn (no steering, as Claude on ACP 2) while 4 workers end 10 turns each (40 end
-// notes) and the coordinator queues a message and then replaces it. At the turn's end everything waiting goes as ONE
-// prompt: each worker's newest note only (4), and only the coordinator's replacement (1).
-test('O125 point 5: 40 notes from 4 workers and 2 coordinator messages, the second replacing the first, arrive as one prompt with 4 notes and 1 coordinator message', { timeout: 300000 }, async (t) => {
+// notes) and the coordinator queues a message and then replaces it. At the turn's end what waits goes as one prompt per
+// sender (O246: P9's and the coordinator's are never joined): each worker's newest note only (4), and only the
+// coordinator's replacement (1).
+test('O125 point 5: 40 notes from 4 workers and 2 coordinator messages, the second replacing the first, arrive as one prompt per sender with 4 notes and 1 coordinator message', { timeout: 300000 }, async (t) => {
   const instance = await start(t, { P9_WAKE_AFTER_MS: '2000' });
   await call(instance, '/file-protection', 'POST', { on: false });
   const project = (await call(instance, '/projects', 'POST', { name: 'Fresh', work: { kind: 'new', parent: '', name: 'fresh' } })).body.project.id;
@@ -100,12 +101,13 @@ test('O125 point 5: 40 notes from 4 workers and 2 coordinator messages, the seco
   assert.ok(held >= 42, 'fewer than 40 notes and 2 coordinator messages waited: ' + held);
   const mark = (await call(instance, '/chat/events?after=0')).body.cursor;
   for (const dir of [instance.workspace, folder]) fs.writeFileSync(path.join(dir, 'go'), '');
-  for (let n = 0; (await events(instance, lead.conversation)).filter((e) => e.cursor > mark && e.type === 'turn-end').length < 2 && n < 600; n += 1) await pause(100);
-  await pause(3000); // nothing more comes after the one prompt
+  for (let n = 0; (await events(instance, lead.conversation)).filter((e) => e.cursor > mark && e.type === 'turn-end').length < 3 && n < 600; n += 1) await pause(100);
+  await pause(3000); // nothing more comes after the two prompts
   const prompts = (await events(instance, lead.conversation)).filter((e) => e.cursor > mark && e.type === 'user');
   const all = JSON.stringify(prompts.map((e) => e.data));
-  assert.equal(prompts.length, 1, 'not one prompt: ' + all);
-  const text = JSON.stringify(prompts[0].data);
+  // P9's waiting lines in one prompt, the coordinator's message in a turn of its own (in the order they first waited).
+  assert.deepEqual(prompts.map((e) => e.data.from === 'p9' ? 'p9' : e.data.from === coordinator.conversation ? 'coordinator' : e.data.from).sort(), ['coordinator', 'p9'], 'not one prompt per sender: ' + all);
+  const text = all;
   const count = (needle) => text.split(needle).length - 1;
   for (const k of [1, 2, 3, 4]) {
     assert.equal(count(`w${k}-turn-10`), 1, `Worker${k}'s newest note is not in the prompt once: ` + text);
@@ -113,7 +115,7 @@ test('O125 point 5: 40 notes from 4 workers and 2 coordinator messages, the seco
   }
   assert.equal(count('coordinator second wording'), 1, 'the coordinator\'s replacement is not in the prompt once: ' + text);
   assert.equal(count('coordinator first wording'), 0, 'the replaced coordinator message went too: ' + text);
-  console.log(`PASS O125 point 5: ${held} held for the lead, one prompt at the turn's end with each worker's newest note and the coordinator's replacement only`);
+  console.log(`PASS O125 point 5: ${held} held for the lead, one prompt per sender at the turn's end with each worker's newest note and the coordinator's replacement only`);
 });
 
 // O109 FIX1 (Reviewer on 44c3a71): after a restart the first kept message ('gate') starts a turn that waits, so the second

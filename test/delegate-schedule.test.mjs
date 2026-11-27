@@ -213,3 +213,32 @@ test('O141: a Stop while a prompt reads its project note wins, so a prompt alrea
   const types = (await events(instance, chat)).map((e) => e.type);
   assert.ok(!types.includes('user') && !types.includes('turn-end'), 'the prompt ran after Stop: ' + JSON.stringify(types));
 });
+
+// O246: the user's message and a P9 notice that both waited behind a running turn are never one prompt: each gets a
+// turn of its own, in its own sender's mode. The notice (a scheduled prompt, sent by P9 with no mode) runs in the chat's
+// mode (Plan); the user's message, sent for Auto, runs in Auto after it. Joined, the notice ran in the user's Auto.
+test('O246: a P9 notice and the user\'s message waiting behind a turn go as two prompts, each in its own sender\'s mode', { timeout: 120000 }, async (t) => {
+  const instance = await start(t);
+  await call(instance, '/file-protection', 'POST', { on: false });
+  const a = await agent(t, instance);
+  const chat = a.conversation;
+  assert.equal((await call(instance, `/chat/${chat}/prompt`, 'POST', { text: 'gate', mode: 'Plan' })).status, 202);
+  await until(instance, (e) => e.conversation === chat && e.data?.content?.text === 'gating');
+  const mark = (await call(instance, '/chat/events?after=0')).body.cursor;
+  const notice = await a.tool('schedule_prompt', { text: 'notice', at: new Date(Date.now() + 1000).toISOString() });
+  assert.equal(notice.action, 'scheduled', JSON.stringify(notice));
+  const held = async (text) => (await events(instance, chat)).some((e) => e.cursor > mark && e.type === 'held' && String(e.data?.text).endsWith(text));
+  for (let i = 0; !(await held('\n\nnotice')) && i < 300; i += 1) await pause(100);
+  assert.ok(await held('\n\nnotice'), 'the P9 notice did not wait behind the turn');
+  const mine = await call(instance, `/chat/${chat}/prompt`, 'POST', { text: 'mode', mode: 'Auto', when: 'queue' });
+  assert.ok(mine.body.held, JSON.stringify(mine.body));
+  writeFileSync(path.join(instance.workspace, 'go'), ''); // a chat with no project works in the workspace
+  const after = async () => (await events(instance, chat)).filter((e) => e.cursor > mark);
+  for (let i = 0; !(await after()).some((e) => e.data?.content?.text === 'mode:auto') && i < 300; i += 1) await pause(100);
+  await pause(1500); // nothing more comes after the two prompts
+  const trail = (await after()).filter((e) => e.type === 'user' || e.type === 'mode').map((e) => e.type === 'mode' ? 'mode:' + e.data.name : e.data.from === 'p9' && e.data.text.endsWith('\n\nnotice') ? 'p9 notice' : e.data.from === undefined && e.data.text === 'mode' ? 'user mode' : JSON.stringify(e.data));
+  // The notice's turn sets no mode (it stays in Plan); the user's sets Auto, and the agent answers in Auto.
+  assert.deepEqual(trail, ['p9 notice', 'user mode', 'mode:Auto'], 'not two prompts each in its own sender\'s mode');
+  assert.ok((await after()).some((e) => e.data?.content?.text === 'mode:auto'), 'the user\'s message did not run in Auto');
+  console.log('PASS O246: a P9 notice and the user\'s message that waited went as two prompts, the notice in Plan, the user\'s in Auto');
+});
