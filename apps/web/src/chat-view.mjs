@@ -1470,7 +1470,9 @@ async function loadChat() {
   // Review rounds 4-8: a turn end applied after a newer turn started (both in one poll, or buffered by behind()) sends as
   // 'queue', so the daemon holds the message for that newer turn's end. None to a chat stopped or moving by then (a stop in
   // the same poll): the daemon would resume it.
-  const settle = (ended, answered_) => { try { for (const s of ended) { finished(s); turnEnd(s, free(s)); } for (const id of answered_) { const s = sess(id); if (s && !s.pending) answered(s); } } catch (e) { console.error('chat batch', e); } };
+  // O260: a chat that ended twice in one poll (its held message ran a whole turn there) finishes once, at its first end;
+  // turnEnd still runs for every end, in order.
+  const settle = (ended, answered_) => { try { const told = new Set(); for (const s of ended) { if (!told.has(s)) { told.add(s); finished(s); } turnEnd(s, free(s)); } for (const id of answered_) { const s = sess(id); if (s && !s.pending) answered(s); } } catch (e) { console.error('chat batch', e); } };
   // O249: an event for a chat not loaded yet waits with it while it loads (history up to the event before), then applies
   // in order; the loop goes on, so the shown chat's replies do not wait behind a busy chat's history over a slow link.
   // Review rounds 2-3: every buffered event applies first, so the chat's state is as it is now.
