@@ -1055,10 +1055,8 @@ function cancelTurn(s, quiet) {
 // The end of a turn applies a queued mode, then sends the next queued message.
 // Threat model row 21 (no notice when a turn ended): a live turn-end nobody is watching leaves an
 // "<agent> finished" card, and a desktop notice while the window is in the background. Only P9's words, never reply text.
-// O260: none at an end whose turn-end says next (the daemon sends a held message as a new turn now); that turn's end, or
-// the daemon's word that it did not start (unheld ends), tells it.
 function finished(s) {
-  if (s.queue.length || s.next) return;
+  if (s.queue.length) return;
   const onScreen = document.hasFocus() && (outer.S.focus === 'chat' && (outer.S.split ? outer.S.open.slice(0, 2) : outer.S.open.slice(0, 1)).includes(s.id) || outer.mdl.open && outer.S.modal?.kind === 'chat' && outer.S.modal.id === s.id);
   if (onScreen) return;
   s.done = true; outer.keepUnseen();
@@ -1248,7 +1246,7 @@ function applyChat(ev, into) {
   // Last used, as the daemon's list counts it (History's order); a stub's older history can load after newer events.
   if (!NOT_USE.includes(ev.type)) s.used = Math.max(s.used || 0, ev.at);
   const last = s.events[s.events.length - 1], notice = text => s.events.push({ t: 'notice', text });
-  const settle = () => { s.working = s.prompted = s.next = false; s.pending = null; s.events = s.events.filter(e => e.t !== 'approval' && e.t !== 'question'); };
+  const settle = () => { s.working = s.prompted = false; s.pending = null; s.events = s.events.filter(e => e.t !== 'approval' && e.t !== 'question'); };
   switch (ev.type) {
     case 'user': if (typeof d.note === 'string') notice('P9 told the agent: ' + d.note.trim()); s.events.push({ t: 'user', text: d.text, images: d.images, files: d.files, when: new Date(ev.at).toTimeString().slice(0, 5), ...(d.ask && { ask: d.from ?? true }), ...(d.info && { info: d.from ?? true }), ...(d.from && { from: d.from, fromTitle: d.fromTitle }), ...(d.repeat === true && { repeat: true }) }); if (!s.profile?.gone) s.state = 'running'; s.working = s.prompted = s.sent = true; if (!into) turnsOf.set(s.id, (turnsOf.get(s.id) || 0) + 1);
       if (Array.isArray(d.held)) s.held = s.held?.filter(h => !d.held.includes(h.id)); break;
@@ -1258,8 +1256,7 @@ function applyChat(ev, into) {
     case 'held-text': for (const h of s.held || []) if (h.id === d.id) h.text = d.text; break;
     // A note from another chat that waits for this chat's next message: shown where it arrived; it started nothing.
     case 'note': s.events.push({ t: 'user', text: d.text, when: new Date(ev.at).toTimeString().slice(0, 5), info: d.from ?? true, fromTitle: d.fromTitle }); break;
-    // O260 ends: the held message its turn-end's next meant did not start a turn, so that end is the chat's last.
-    case 'unheld': s.held = s.held?.filter(h => h.id !== d.id); if (!toBox(d) && d.why !== 'noted') notice('Not sent (' + d.why + '): ' + d.text); if (d.ends && !into) { settle(); return s; } break;
+    case 'unheld': s.held = s.held?.filter(h => h.id !== d.id); if (!toBox(d) && d.why !== 'noted') notice('Not sent (' + d.why + '): ' + d.text); break;
     case 'connected': notice('Connected over ACP'); s.state = 'running'; s.session = d.session; break;
     // O32: the model the resumed session is really on, so a change shows (the Model pill follows the config event after it).
     case 'resumed': notice('Resumed natively (session/resume)' + (typeof d.model === 'string' ? ' on ' + d.model : '')); if (Array.isArray(d.restoreNotice) && d.restoreNotice.length) notice('Could not restore ' + d.restoreNotice.join(', ')); s.state = 'running'; s.session = d.session; break;
@@ -1328,7 +1325,7 @@ function applyChat(ev, into) {
     case 'lock-rejected': notice((d.ask ? 'Answering another chat (read-only): rejected ' : 'Agent lock: rejected ') + (d.toolCall?.title || 'a tool call')); break;
     case 'restart-request': s.events.push({ t: 'notice', text: 'The agent asks you to restart P9: ' + d.reason, restart: true }); break; // RS2: with a Restart button
     case 'steer-lost': notice('This message may not have reached the agent: ' + d.text); break;
-    case 'turn-end': settle(); s.next = d.next; s.lastEnd = ev.at; outer.usageNow(); outer.queueSoon(); if (d.stopReason !== 'end_turn') notice('Turn ended: ' + d.stopReason); return s;
+    case 'turn-end': settle(); s.lastEnd = ev.at; outer.usageNow(); outer.queueSoon(); if (d.stopReason !== 'end_turn') notice('Turn ended: ' + d.stopReason); return s;
     // Review rounds 8-10: an error that ends a prompt (ends: the daemon's prompt-error and refused-setting paths, which send no
     // turn-end) closes the turn the same way. Any other (a refused hand-off mid-turn) keeps the turn and its ask; it clears
     // Working as before, which the agent's next output sets again, and an older ledger's errors (no ends) still clear it.
@@ -1472,8 +1469,9 @@ async function loadChat() {
   // Review rounds 4-8: a turn end applied after a newer turn started (both in one poll, or buffered by behind()) sends as
   // 'queue', so the daemon holds the message for that newer turn's end. None to a chat stopped or moving by then (a stop in
   // the same poll): the daemon would resume it.
-  // O260: a chat whose held message ran a whole turn in the same poll ended twice there; it finished once (a Set).
-  const settle = (ended, answered_) => { try { for (const s of new Set(ended)) { finished(s); turnEnd(s, free(s)); } for (const id of answered_) { const s = sess(id); if (s && !s.pending) answered(s); } } catch (e) { console.error('chat batch', e); } };
+  // O260: a chat that ended twice in one poll (its held message ran a whole turn there) finishes once, at its first end;
+  // turnEnd still runs for every end, in order.
+  const settle = (ended, answered_) => { try { const told = new Set(); for (const s of ended) { if (!told.has(s)) { told.add(s); finished(s); } turnEnd(s, free(s)); } for (const id of answered_) { const s = sess(id); if (s && !s.pending) answered(s); } } catch (e) { console.error('chat batch', e); } };
   // O249: an event for a chat not loaded yet waits with it while it loads (history up to the event before), then applies
   // in order; the loop goes on, so the shown chat's replies do not wait behind a busy chat's history over a slow link.
   // Review rounds 2-3: every buffered event applies first, so the chat's state is as it is now.
