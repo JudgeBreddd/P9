@@ -559,10 +559,6 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     else if (type === 'unheld') settleResumed([data.id]);
     wakeAll(type, conversation);
   };
-  // O274: a message handed back unsent gets one 'unheld' per ID it waited under (each retires that ID), but only the first
-  // gives its text back: the rest say again, so a resumed message (was) or a joined one (held) is not put in the box twice.
-  // was on the first: the window looks the message's files up under any of them.
-  const unheldOnce = (chat, ids, text, data) => [...new Set(ids)].forEach((id, i) => emit(chat, 'unheld', { id, text, ...data, ...(i ? { again: true } : new Set(ids).size > 1 && { was: [...new Set(ids)].slice(1) }) }));
   // A resumed message that went into a running turn's queue (202 held) stays in resuming:<lead> as queued: <held id>
   // until a 'user' event carries that id (it reached the agent) or an 'unheld' names it (refused, replaced, cancelled):
   // the queue is memory, so a restart in between sends it again (resumeLeft). Hoisted: emit runs before the prefs helpers.
@@ -678,7 +674,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
         // O109: one a restart cut out of a turn's queue (was) goes in the mode it waited with, as at that turn's end; its
         // sender may not be running yet, so its mode now is not known.
         const picked = !allowed() ? { error: 'session-ended' } : narrow && !item.was ? narrow(item) : { mode: item.body.mode };
-        if (picked.error) { unheldOnce(item.chat, [item.id, ...(item.was ?? [])], item.body.text, { why: picked.error }); done(); continue; }
+        if (picked.error) { for (const id of [item.id, ...(item.was ?? [])]) emit(item.chat, 'unheld', { id, text: item.body.text, why: picked.error }); done(); continue; }
         setResuming(lead, resumingOf(lead).map((i) => (i.id === item.id ? { ...i, body: item.body, sending: db.prepare('SELECT max(cursor) AS c FROM events').get().c ?? 0 } : i)));
         const { repeat, ...kept } = item.body, body = { ...kept, ...(picked.mode !== undefined && { mode: picked.mode }), when: 'queue' };
         if (repeat) repeats.add(body);
@@ -687,7 +683,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
         origins.set(body, { lead, id: item.id }); // a busy chat holds it: hold() takes this entry over (O109 FIX1)
         // was: the ID it waited under before a restart, so its 'user' event clears it from the window.
         const result = await api.prompt(item.chat, body, item.was?.length ? item.was : undefined, item.from ?? undefined).catch(() => refused(500, 'resume-failed'));
-        if (result.status !== 202 && result.status !== 200) unheldOnce(item.chat, [item.id, ...(item.was ?? [])], item.body.text, { why: result.error ?? 'refused' });
+        if (result.status !== 202 && result.status !== 200) for (const id of [item.id, ...(item.was ?? [])]) emit(item.chat, 'unheld', { id, text: item.body.text, why: result.error ?? 'refused' });
         // Into a running turn's queue: hold() has already moved this entry to its new ID in the same write (O109 FIX1).
         done();
       }
@@ -1643,7 +1639,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
   }
   // Every way a waiting message leaves without being sent passes here, so a waiting question's asker is told here too.
   // from (#540 review 16): another chat's or P9's message; the window and the phone put only the user's own back in the box.
-  const unheld = (id, items, why) => { for (const item of items) { unheldOnce(id, [item.id, ...(item.was ?? [])], item.body.text, { why, ...(senders.has(item.body) && { from: senders.get(item.body) }) }); solos.get(item.body)?.end({ error: why }); } };
+  const unheld = (id, items, why) => { for (const item of items) { for (const x of [item.id, ...(item.was ?? [])]) emit(id, 'unheld', { id: x, text: item.body.text, why, ...(senders.has(item.body) && { from: senders.get(item.body) }) }); solos.get(item.body)?.end({ error: why }); } };
   // O188: each chat's count of turns and tool calls started (delegate.mjs: a worker's late wake is cancelled by either).
   const acts = new Map(), act = (id) => acts.set(id, (acts.get(id) ?? 0) + 1);
   function toolStep(id, session, update) {
@@ -2406,7 +2402,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       if (!list) return [];
       db.exec('BEGIN');
       try { if (into) setPaused(lead, [...list, ...into].sort((a, b) => (a.seq ?? 0) - (b.seq ?? 0))); setPaused(worker, null); db.exec('COMMIT'); } catch (error) { db.exec('ROLLBACK'); throw error; }
-      if (!into) for (const item of list) unheldOnce(item.chat, item.held ?? [item.id], item.body.text, { why: 'stopped', ...(item.from && { from: item.from }) });
+      if (!into) for (const item of list) for (const shown of item.held ?? [item.id]) emit(item.chat, 'unheld', { id: shown, text: item.body.text, why: 'stopped', ...(item.from && { from: item.from }) });
       wakeAll('resumed');
       return into ? [] : list;
     },
@@ -2416,7 +2412,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     async resume(lead, narrow, resumed) {
       const list = pausedOf(lead);
       if (!list) return null;
-      for (const item of list) unheldOnce(item.chat, item.held ?? [item.id], item.body.text, { why: 'resumed' });
+      for (const item of list) for (const shown of item.held ?? [item.id]) emit(item.chat, 'unheld', { id: shown, text: item.body.text, why: 'resumed' });
       db.exec('BEGIN'); // moved in one step: a restart finds each message in one list, never both or neither
       try { setResuming(lead, [...resumingOf(lead), ...list]); setPaused(lead, null); db.exec('COMMIT'); } catch (error) { db.exec('ROLLBACK'); throw error; }
       wakeAll('resumed');

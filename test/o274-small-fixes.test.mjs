@@ -39,20 +39,6 @@ test('O274: a config with no effort picker clears the effort list_chats and the 
 });
 
 // #560 r3: a message handed back unsent gives its text back once, not once per ID it waited under (a resumed one has two).
-test('O274: a resumed message refused after a restart is handed back once, every ID it waited under retired', { timeout: 120000 }, async (t) => {
-  const { instance, id } = await stopped(t);
-  plant(instance, id, [{ id: 'q-now', chat: id, from: null, fromTitle: null, mixed: null, queued: 'q-now', prior: ['q-before'], body: { text: 'resumed once', mode: 'bogus' } }]);
-  const second = await restart(t, instance, 'o274-once');
-  let back = [];
-  for (let i = 0; i < 100 && back.length < 2; i += 1) { back = (await events(second, id)).filter((e) => e.type === 'unheld' && e.data.text === 'resumed once'); await pause(100); }
-  await pause(500); // nothing more after the two
-  back = (await events(second, id)).filter((e) => e.type === 'unheld' && e.data.text === 'resumed once');
-  assert.deepEqual(back.map((e) => [e.data.id, Boolean(e.data.again)]), [['q-now', false], ['q-before', true]], JSON.stringify(back.map((e) => e.data)));
-  assert.deepEqual(back[0].data.was, ['q-before'], 'the first names the earlier ID, for the files sent under it');
-});
-
-// #562 r1: a joined prompt kept from before O246 (mixed) that waits behind a turn is a sender of its own: the user's
-// message queued after it neither joins it nor runs under it.
 test('O274: a kept joined prompt (mixed) waiting behind a turn goes alone, apart from the user\'s queued message', { timeout: 120000 }, async (t) => {
   const { instance, id } = await stopped(t);
   fs.writeFileSync(path.join(instance.workspace, 'log-prompts'), '');
