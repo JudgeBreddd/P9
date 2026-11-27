@@ -138,19 +138,19 @@ function csrfToken() {
 // CAT-1f: each agent's name, from GET /agents once it answers; until then the two built in. Its modes are the answer's alone
 // (fillAgents, CAT-2).
 const names: Record<string, string> = { claude: 'Claude', codex: 'Codex' }, agentName = (a: string) => names[a] || a;
-// #547 review: one read at a time (a slower, older answer cannot replace a newer one), and an answer is checked before it
-// replaces anything, so a malformed one keeps the names and modes there are. It never rejects, and has a deadline, so a
-// read that hangs does not hold every later caller (#547 review 2).
+// #547 review: an answer is checked before it replaces anything, so a malformed one keeps the names and modes there are,
+// and an older answer that lands after a newer one was applied is dropped. Every call reads (round 6: Settings opened again
+// must not wait on a read that hangs); each never rejects and has a deadline (#547 review 2). It answers true once a
+// catalog is applied (this one or a newer), false on a timeout, a failed read or a rejected answer (#547 review 4).
 type Agent = { id: string; name?: string; short?: string; modes?: { name: string }[] };
 const agentsOk = (agents: unknown): agents is Agent[] => Array.isArray(agents) && agents.every((a: Json | null) => !!a && typeof a.id === 'string'
   && (a.modes === undefined || (Array.isArray(a.modes) && a.modes.every((m: Json | null) => !!m && typeof m.name === 'string'))));
-// It answers true only when a catalog was applied (#547 review 4).
-let agentsRead: Promise<boolean> | undefined;
-const loadAgents = () => agentsRead ??= request('/agents', deadline(20000)).then(({ agents }) => { if (!agentsOk(agents)) return false;
-  fillAgents(agents); for (const k in names) delete names[k]; for (const a of agents) names[a.id] = a.short || a.name || a.id;
-  try { if (usageData) usageLines(usageData); } catch { /* the next Usage read draws it */ } // its plan cards are named from these (USE-1): drawn again from the last read, not read again
-  return true; })
-  .catch(() => false).finally(() => { agentsRead = undefined; });
+let agentsAsked = 0, agentsApplied = 0;
+const loadAgents = (): Promise<boolean> => { const seq = ++agentsAsked;
+  return request('/agents', deadline(20000)).then(({ agents }) => { if (!agentsOk(agents)) return false; if (seq < agentsApplied) return true;
+    agentsApplied = seq; fillAgents(agents); for (const k in names) delete names[k]; for (const a of agents) names[a.id] = a.short || a.name || a.id;
+    try { if (usageData) usageLines(usageData); } catch { /* the next Usage read draws it */ } // its plan cards are named from these (USE-1): drawn again from the last read, not read again
+    return true; }).catch(() => false); };
 // A deadline for a read, kept by a timer (AbortSignal.timeout is missing in older browsers).
 const deadline = (ms: number) => { const stop = new AbortController(); setTimeout(() => stop.abort(), ms); return stop.signal; };
 async function request(path: string, signal?: AbortSignal) {
