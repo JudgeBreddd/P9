@@ -140,6 +140,12 @@ let steering = true;
 // O194: like claude-agent-acp 0.106.0, it marks a run it starts with no prompt only for a client that advertises asyncTasks.
 let asyncTasks = false;
 let air = false; // A2 step 5: the client declared the _meta extension (claude-agent-acp's isAirClient)
+const goalSays = async (sessionId, text) => {
+  const arg = /^\/goal\s+([\s\S]+)$/.exec(text)?.[1].trim();
+  if (!arg) return false;
+  if (air) await connection.sessionUpdate({ sessionId, update: { sessionUpdate: 'session_info_update', _meta: { jetbrains: { air: { version: 1, goal: arg === 'clear' ? null : { objective: arg, status: 'active', controlMethod: '_session/goal' } } } } } });
+  return true;
+};
 const stream = acp.ndJsonStream(Writable.toWeb(process.stdout), Readable.toWeb(process.stdin));
 const connection = acp.connectAgent(stream, {
   async initialize(params) {
@@ -156,6 +162,8 @@ const connection = acp.connectAgent(stream, {
   },
   // Like claude-agent-acp 0.88's _session/steering with idleBehavior promptRequired.
   async extMethod(method, params) {
+    // O265: like claude-agent-acp's _session/goal, the goal as a '/goal' prompt would set or clear it.
+    if (method === '_session/goal') { await goalSays(params.sessionId, params.action === 'set' ? '/goal ' + params.objective : '/goal clear'); return {}; }
     if (method !== '_session/steering' || !steering) throw acp.RequestError.methodNotFound(method);
     sprintRules(params.prompt);
     appendFileSync('steers.log', textOf(params.prompt) + '\n');
@@ -364,6 +372,8 @@ const connection = acp.connectAgent(stream, {
     // A2 step 5: like claude-agent-acp's publishGoal, a goal snapshot (JSON, or null) in session_info_update _meta, only
     // to a client that declares the _meta extension; 'goal-raw <json>' sends the _meta as given.
     // 'goal-pad <json>' sends the goal with 70 KB of other _meta, so the update is over P9's stored-event size.
+    // O265: '/goal <objective>' and '/goal clear' alone in the prompt, as claude-agent-acp's goalUpdateFromPrompt reads them.
+    if (await goalSays(sessionId, text)) { await say('goal sent'); return { stopReason: 'end_turn' }; }
     if (text.startsWith('goal ') || text.startsWith('goal-raw ') || text.startsWith('goal-pad ')) {
       const raw = text.startsWith('goal-raw '), pad = text.startsWith('goal-pad '), value = JSON.parse(text.slice(text.indexOf(' ') + 1));
       const meta = raw ? value : { jetbrains: { air: { version: 1, goal: value } }, ...(pad ? { pad: 'x'.repeat(70000) } : {}) };

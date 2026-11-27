@@ -1357,7 +1357,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
         compacted(session, conversation.id, update);
         if (repeated(session, update)) return;
         const g = goalSaid(update);
-        if (g !== undefined) goals.set(conversation.id, g);
+        if (g !== undefined) { goals.set(conversation.id, g); session.goalHeld = !!g; } // O265: this run's agent has it (api.goal)
         // An oversized update is stored without its _meta (trim); its goal (set or cleared, already cut to size) is put
         // back alone, so the read-back after a restart finds it and does not bring back the one before.
         let stored = trim(agentImages(update));
@@ -2461,6 +2461,25 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       const body = { text };
       commands.add(body);
       return api.prompt(id, body, undefined, from);
+    },
+    // O265: the goal line's buttons. clear: the agent's goal goes, so a stuck or failed one is one click from gone; P9 stores
+    // the clear too, so the line goes at once. set: the stored active goal goes back once to an agent started since it was
+    // said (a resume drops it and reports none). By a press, not on every resume: a met goal does not come back as a clear
+    // (live check 2026-11-27, n=1), so an automatic set would bring a met goal back after each restart. In a running turn the
+    // adapter's own _session/goal steers it in; otherwise it goes alone as a command (command, above), which starts the agent.
+    async goal(id, body) {
+      if (!ID.test(id ?? '') || !row(id)) return refused(404, 'unknown-conversation');
+      if (!body || typeof body !== 'object' || Object.keys(body).join() !== 'action' || !['set', 'clear'].includes(body.action)) return refused(400, 'request-refused');
+      const g = goalNow(id), session = live.get(id), set = body.action === 'set';
+      if (set && g?.status !== 'active') return refused(409, 'no-goal');
+      if (set && session?.goalHeld) return refused(409, 'goal-held');
+      if (!set) { goals.set(id, null); if (session) session.goalHeld = false; emit(id, 'update', { sessionUpdate: 'session_info_update', _meta: { jetbrains: { air: { goal: null } } } }); }
+      if (session?.ready && !session.stopping && row(id).state === 'turn') {
+        session.agent.request('_session/goal', { sessionId: session.sessionId, action: body.action, ...(set && { objective: g.objective }) }).catch(() => {});
+        return { status: 200, goal: set ? g : null };
+      }
+      const sent = await api.command(id, set ? '/goal ' + g.objective : '/goal clear');
+      return sent.status >= 300 ? sent : { status: 200, goal: set ? g : null };
     },
     ask(id, text, from, still) {
       let end;

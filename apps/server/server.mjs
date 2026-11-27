@@ -616,6 +616,7 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
   api.post('/chat/:id/rename', async (c) => reply(c, chat.projects.chats.rename(c.req.param('id'), await json(c))));
   api.post('/chat/:id/archive', async (c) => reply(c, chat.projects.chats.archive(c.req.param('id'), await json(c))));
   // Peer help (SECURITY.md § Delegate): only the user at the desktop opens a chat to other chats' questions.
+  api.post('/chat/:id/goal', async (c) => reply(c, await chat.goal(c.req.param('id'), await json(c)))); // O265: the goal line's Set again and Clear
   api.post('/chat/:id/askable', async (c) => (c.get('device') ? c.json({ error: 'desktop-only' }, 403) : reply(c, chat.setAskable(c.req.param('id'), await json(c)))));
   api.post('/chat/:id/delete', async (c) => reply(c, await chat.projects.chats.delete(c.req.param('id'), await json(c))));
   api.get('/chat/:id/images/:hash', async (c) => reply(c, await chat.image(c.req.param('id'), c.req.param('hash'))));
