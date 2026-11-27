@@ -1004,18 +1004,16 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     session.setWaits = (session.setWaits ?? 0) + 1;
     const set = (session.setChain ?? Promise.resolve()).then(send);
     // #540 reviews 15 and 16: a set the adapter never answers would hold the chain, and every later prompt is refused ("An
-    // earlier setting has not answered"). Past SET_CAP_MS a mode set under the Agent lock retires the session: its adapter
-    // is stopped, so a late writable answer can never land on a later turn, and the chat's next prompt starts a clean one.
-    // The chat says why. Any other set (an unlock, a writable mode, a model) only frees the chain: the turn runs on, still
-    // in the mode it had.
-    // ponytail: only a mode set made under the lock retires; an earlier unlock, writable mode, model or effort set that
-    // answers late can still land, even after a later lock (filed as its own row).
+    // earlier setting has not answered"). Past SET_CAP_MS a mode set not answered retires the session, lock on or off: its
+    // adapter is stopped, even mid-turn, so a late mode answer can never land on a later turn, and the chat's next prompt
+    // starts a clean one. The chat says why. A model or effort set only frees the chain: the turn runs on.
+    // ponytail: a late model or effort answer can still land on a later turn; only the mode is guarded.
     let cap;
     const capped = new Promise((resolve) => { cap = setTimeout(resolve, SET_CAP_MS, 'cap'); });
     session.setChain = Promise.race([set.catch(() => {}), capped]).then((how) => {
       clearTimeout(cap);
       if (how !== 'cap' || live.get(session.id) !== session || session.stopping) return;
-      if (!(configId === 'mode' && locked)) return;
+      if (configId !== 'mode') return;
       emit(session.id, 'error', { message: 'The agent did not answer a setting for ' + Math.round(SET_CAP_MS / 1000) + ' s, so P9 stopped it. Your next message starts it again.' });
       stopConversation(session.id);
     }).finally(() => { session.setWaits -= 1; });
@@ -2096,12 +2094,12 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       // once stopping), nor does a device revoked meanwhile.
       // Review round 2 finding 3: after the 202 the box is empty, so the revoked device's message is handed back (its text
       // into the box, as a stopped start's held one) and the chat says so once (told: the failure path below says nothing
-      // more). Another chat's message (from) gets only the unheld: its "Not sent" line is the one notice.
+      // more). The error line ends the turn in the window and the phone (an unheld does not), so it goes for every message.
       // ponytail: the 202 cleared its files from the box too and only the text comes back, so the line asks for them again.
+      // ponytail: another chat's message (from) shows two notices, its "Not sent" line and this error; one would be enough.
       const handBack = (message) => {
-        const from = senders.has(body);
-        emit(id, 'unheld', { id: turn, text: body.text, why: 'stopped', ...(from && { from: senders.get(body) }) });
-        if (!from) emit(id, 'error', { message: message + (images?.length ? ' Attach its files again.' : ''), ends: true });
+        emit(id, 'unheld', { id: turn, text: body.text, why: 'stopped', ...(senders.has(body) && { from: senders.get(body) }) });
+        emit(id, 'error', { message: message + (images?.length ? ' Attach its files again.' : ''), ends: true });
         throw Object.assign(new Error(message), { told: true });
       };
       const dispatch = async () => {

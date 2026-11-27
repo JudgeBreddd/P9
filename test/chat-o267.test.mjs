@@ -179,23 +179,22 @@ test('O267b: a Stop while the start snapshot runs sends no prompt', async (t) =>
   console.log('PASS O267b stop: a Stop during the start snapshot sent no prompt');
 });
 
-// Review round 2 finding 6: past the cap only a mode set under the lock retires the session. An unlock the adapter never
-// answers frees the chain and leaves the chat as it is (still narrow).
-test('O267b: an unlock the adapter never answers frees the chain after the cap and leaves the chat running', { timeout: 60000 }, async (t) => {
+// Review round 4: past the cap a mode set not answered retires the session, lock on or off. An unlock the adapter never
+// answers (the lock is off by then) stops the chat with a line saying why; the next prompt starts a clean adapter.
+test('O267b: a mode set the adapter never answers retires the session at the cap, lock off', { timeout: 60000 }, async (t) => {
   const { chat, dir, id, seen, until, started } = await setup(t, 'o267b-hang', true, { P9_SET_CAP_MS: '8000' });
   assert.equal((await chat.setLock({ on: true })).on, true);
   await writeFile(path.join(dir, 'slow-config'), '600000'); // never answers in this test
   const unlock = chat.setLock({ on: false });
   await started();
   await unlink(path.join(dir, 'slow-config'));
-  await unlock;
-  await pause(9000); // past the cap
-  assert.ok(!seen.some((e) => e.type === 'stopped' || (e.type === 'error' && /did not answer a setting/.test(e.data?.message))), 'not retired: ' + JSON.stringify(seen.map((e) => e.type)));
+  assert.equal((await unlock).on, false);
+  await until((e) => e.type === 'error' && /did not answer a setting/.test(e.data?.message), 'the cap retired the session');
+  await until((e) => e.type === 'stopped', 'stopped');
   const r = await chat.prompt(id, { text: 'after the hang' });
   assert.equal(r.status, 202, 'not refused for good: ' + JSON.stringify(r));
-  await until(echoed('after the hang'), 'it reached the agent');
-  assert.ok(!seen.some((e) => e.type === 'stopped'), 'on the same adapter');
-  console.log('PASS O267b cap: the hung unlock freed the chain; the chat ran on');
+  await until(echoed('after the hang'), 'a clean adapter answered');
+  console.log('PASS O267b cap: the hung unlock retired the session; the next prompt ran');
 });
 
 test('O267b: an Interrupt held while a start sets its model is handed back when the adapter exits', async (t) => {
@@ -273,10 +272,10 @@ test('O267b: a phone revoked during the start snapshot sends nothing', async (t)
   console.log('PASS O267b revoked: the revoked phone\'s prompt never reached the agent');
 });
 
-// Review round 3 finding 6: another chat's message from a revoked device is handed back once, as a "Not sent" line (its
-// from), with no error line of its own.
-test('O267b: another chat\'s message revoked during the start snapshot is handed back with no error line', async (t) => {
-  const { chat, dir, id, seen, until } = await setup(t, 'o267b-revoked-from', true, { P9_SHELL_START_MS: '1500' });
+// Review round 4: another chat's message from a revoked device is handed back (its from) and the chat still gets the
+// error line, which ends the turn in the window and the phone.
+test('O267b: another chat\'s message revoked during the start snapshot is handed back and ends the turn', async (t) => {
+  const { chat, dir, id, until } = await setup(t, 'o267b-revoked-from', true, { P9_SHELL_START_MS: '1500' });
   const other = (await chat.create({ provider: 'claude' })).conversation;
   await writeFile(path.join(dir, 'calls.log'), '');
   let live = true;
@@ -285,8 +284,8 @@ test('O267b: another chat\'s message revoked during the start snapshot is handed
   live = false;
   const back = (await until((e) => e.type === 'unheld' && e.data?.id === r.turn, 'handed back')).find((e) => e.type === 'unheld' && e.data?.id === r.turn);
   assert.deepEqual([back.data.text, back.data.why, back.data.from], ['from the other chat', 'stopped', other]);
-  await pause(1000); // the failure path has run
-  assert.ok(!seen.some((e) => e.type === 'error' && /signed out/.test(e.data?.message)), 'no error line: ' + JSON.stringify(seen.filter((e) => e.type === 'error')));
+  const error = (await until((e) => e.type === 'error' && /signed out/.test(e.data?.message), 'the error line')).find((e) => e.type === 'error' && /signed out/.test(e.data?.message));
+  assert.equal(error.data.ends, true, 'it ends the turn');
   assert.deepEqual((await lines(path.join(dir, 'calls.log'))).filter((l) => l.endsWith(' prompt')), []);
-  console.log('PASS O267b revoked from: one unheld with from, no error line, nothing sent');
+  console.log('PASS O267b revoked from: unheld with from, an ending error line, nothing sent');
 });
