@@ -10,6 +10,9 @@ const ring = (done, total, label, kind = '') => `<span class="sv-ring ${kind}" r
 // Also each worker row's own spent (spec I3, tokens used); a field not reported counts as 0.
 const k = new Intl.NumberFormat('en', { notation: 'compact', maximumFractionDigits: 1 });
 export const usedText = u => u === null ? 'Nothing reported yet' : `${k.format(u.inputTokens || 0)} in · ${k.format(u.outputTokens || 0)} out · ${k.format(u.cachedTokens || 0)} cached${u.costUsd > 0 ? ` · $${u.costUsd.toFixed(2)}` : ''}`;
+// I3 tokens: a chat's context is its newest usage_update's used of size (chat.mjs gauge), so its limit is the size; null until reported.
+const ctxPct = c => c?.size > 0 ? Math.round(c.used / c.size * 100) : null;
+const ctxText = c => ctxPct(c) === null ? 'Not reported yet' : `${k.format(c.used)} of ${k.format(c.size)} tokens · ${ctxPct(c)}%`;
 export const span = ms => { const m = Math.floor(ms / 60000), h = Math.floor(m / 60); return h ? `${h} h ${m % 60} min` : m ? `${m} min` : 'under a minute'; };
 const WORD = { working: 'Working', idle: 'Idle', stopped: 'Stopped', failed: 'Failed' };
 // What a worker's row says: a review's answer first, then a question to you, then what the chat is doing.
@@ -88,6 +91,7 @@ const lookHtml = (w, s, esc, acts) => {
     + p('Role', esc([w.key ?? 'no role', w.profile && `profile ${w.profile}`, w.mode && `mode ${w.mode}`].filter(Boolean).join(' · ')))
     + p('Folder', esc(w.folder ?? 'none')) + p('Branch', where) + (ch ? p('Changed', ch) : '')
     + p('Review', w.ready ? `Ready: ${esc(w.ready.item ?? '')} at ${esc(String(w.ready.commit ?? '').slice(0, 8))}` + (w.verdict ? ` · ${esc(w.verdict.result ?? '')}${w.verdict.note ? ': ' + esc(w.verdict.note) : ''}` : '') : w.verdict ? esc(`${w.verdict.result ?? ''}${w.verdict.note ? ': ' + w.verdict.note : ''}`) : 'Nothing sent for review')
+    + p('Tokens used', usedText(w.spent ?? null)) + p('Context', ctxText(w.context))
     + (w.waiting ? p('Question', 'It is waiting for you: open its chat to answer.') : '') + '</dl>'
     + `<h4>Its items</h4>${mine.length ? `<ul class="sv-items">${mine.map(i => `<li data-sv-litem="${esc(i.id)}"><span class="sv-text">${esc(i.text)}</span><span class="tag">${i.review ? esc((REVIEW[i.review.state] ?? i.review.state) + (i.review.merged ? ', merged' : '') + (i.review.fixes ? ` · ${i.review.fixes} fix${i.review.fixes === 1 ? '' : 'es'}` : '')) : i.ticked ? 'Ticked, not reviewed' : 'Open'}</span></li>`).join('')}</ul>` : '<p class="muted sm">No items in the plan for this role.</p>'}`
     + `<h4>Notes${L?.notes ? ` <span class="muted sm mono">${esc(L.notes.file)}</span>` : ''}</h4>${L?.notes?.tail.length ? `<pre class="sv-pre" data-sv-notes>${esc(L.notes.tail.join('\n'))}</pre>` : `<p class="muted sm">${L?.notes ? 'The notes file is empty.' : 'No notes file.'}</p>`}`
@@ -106,10 +110,13 @@ const ACTS = [['steer', 'Steer now', 'Into its running turn now'], ['queue', 'Se
 function actsHtml(w, esc) {
   const k = ak(w.chat), dis = k.busy ? ' disabled' : '', b = (act, label, title, more = '') => `<button type="button" data-slot="button" data-variant="outline" data-size="sm" data-sv-act="${act}" title="${title}"${more}${act === 'copy' ? '' : dis}>${label}</button>`;
   const cp = w.folder ? b('copy', 'Copy path', 'Copies its folder\'s path, to open it in your editor', ` data-path="${esc(w.folder)}"`) : '';
+  // data-chat: the same open as a press on its row (projects-view.mjs, the page's click listener); a stopped chat opens too.
+  const open = `<button type="button" data-slot="button" data-variant="outline" data-size="sm" data-chat="${esc(w.chat)}" title="Opens this chat, as a press on its row does">Open chat</button>`;
   return `<h4>Do</h4><div class="sv-acts" data-sv-acts>` + (w.state === 'stopped'
-    ? `<p class="hint" data-sv-stopped>Stopped: it holds no worker place, so nothing here starts it again (that would pass the sprint's place limit). Its lead's send_chat starts it under the limit; or open its chat.</p><div class="sv-btns">${cp}</div>`
+    ? `<p class="hint" data-sv-stopped>Stopped: it holds no worker place, so nothing here starts it again (that would pass the sprint's place limit). Its lead's send_chat starts it under the limit; or open its chat.</p><div class="sv-btns">${open}${cp}</div>`
     : `<textarea data-slot="input" data-sv-msg rows="2" maxlength="20000"${dis} aria-label="${esc(`Message or note to ${w.key ?? w.title ?? 'this chat'}`)}" placeholder="A message or a note for this chat">${esc(k.text ?? '')}</textarea>`
-      + `<div class="sv-btns">${ACTS.map(([a, l, ti]) => b(a, l, ti, a === 'restart' ? ` data-notes="notes/${esc(w.key ?? w.chat)}.md"` : '')).join('')}${cp}</div>`)
+      + `<div class="sv-btns">${open}${ACTS.map(([a, l, ti]) => b(a, l, ti, a === 'restart' ? ` data-notes="notes/${esc(w.key ?? w.chat)}.md"` : '')).join('')}${cp}</div>`)
+    + (w.folder ? `<p class="hint" data-sv-noeditor>Opening its folder in Dev Focus is not here: Dev Focus's Open Folder picks the folder itself. Copy path, then pick it there.</p>` : '')
     + `<p class="hint">Moving an item to another chat is not here: P9 has no route for it. Change the item's role in the plan, or ask the lead.</p><span class="hint" data-sv-asaid role="status">${esc(k.said ?? '')}</span></div>`;
 }
 const answerSaid = (act, r) => r.status === 202 || r.status === 200 ? (act === 'stop' ? 'Stopped its turn.' : act === 'note' ? (r.body?.steered ? 'Noted, into its running turn.' : 'Noted: it reads it with its next message.')
@@ -183,7 +190,7 @@ export function statusHtml(s, esc, opts = {}, o = null) {
     <h3>Chats</h3>
     <ul class="sv-rows">${s.workers.map(w => { const [st, word] = stands(w), q = w.work;
       return `<li data-key="${esc(w.chat)}"><button type="button" class="sv-row" data-chat="${esc(w.chat)}" data-sv-worker="${esc(w.key ?? '')}" data-status="${esc(st)}" title="Open this chat">${q && q.total ? ring(q.done, q.total, `${q.done} of ${q.total} of its items ${doneWord}`) : '<span class="sv-ring none" aria-hidden="true"></span>'}
-        <span class="sv-main"><b>${esc(w.key ?? w.title ?? '')}</b><span class="muted">${esc([w.model, w.effort].filter(Boolean).join(' · '))}${Number.isFinite(w.context) ? ` · context ${Math.round(w.context)}%` : ''}${w.spent ? ' · ' + usedText(w.spent) : ''}</span></span>
+        <span class="sv-main"><b>${esc(w.key ?? w.title ?? '')}</b><span class="muted">${esc([w.model, w.effort].filter(Boolean).join(' · '))}${ctxPct(w.context) === null ? '' : ` · context ${ctxPct(w.context)}%`}${w.spent ? ' · ' + usedText(w.spent) : ''}</span></span>
         <span class="sv-item">${esc(w.task?.item ?? (q && q.total ? (q.next ? 'Next: ' + q.next : q.next === null ? 'All its items passed review' : 'No item taken yet') : 'No items in the plan for this role'))}</span>
         <span class="tag" data-sv-state>${esc(word)}</span></button><button type="button" data-slot="button" data-variant="ghost" data-size="sm" data-sv-lookbtn aria-expanded="${looking.has(w.chat)}" title="Everything about this chat: role, folder, branch, items, notes, last reply">Details</button>${!end && o ? repick(w, o, esc) : ''}${lookHtml(w, s, esc, !end)}</li>`; }).join('')}</ul>
     ${s.owner && s.owner.total ? `<h3>Your items</h3><ul class="sv-rows"><li class="sv-owner-row" data-sv-owner>${ring(s.owner.done, s.owner.total, `${s.owner.done} of ${s.owner.total} of your items closed`)}

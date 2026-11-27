@@ -55,6 +55,15 @@ test('I3 buttons: an open sprint\'s Details has each press; a stopped chat only 
   assert.doesNotMatch(statusHtml(s([w('a')], { at: 1, by: 'owner' }), esc), /data-sv-act|data-sv-msg/);
 });
 
+test('I3 buttons: Open chat is a labelled button in Details that opens the chat as its row does; why there is no open-in-editor', () => {
+  const html = statusHtml(s([w('a'), w('b', { state: 'stopped' }), w('c', { folder: null })]), esc);
+  for (const k of ['a', 'b', 'c']) assert.match(row(html, k), new RegExp(`<div class="sv-btns"><button [^>]*data-chat="${k}"[^>]*>Open chat</button>`), `${k}: Open chat first, a stopped chat too`);
+  assert.match(row(html, 'a'), /data-sv-noeditor>Opening its folder in Dev Focus is not here[^<]*Copy path, then pick it there/);
+  assert.match(row(html, 'b'), /data-sv-noeditor>/, 'a stopped chat says it too');
+  assert.doesNotMatch(row(html, 'c'), /data-sv-noeditor/, 'no folder, nothing to open');
+  assert.doesNotMatch(statusHtml(s([w('a')], { at: 1, by: 'owner' }), esc), />Open chat</, 'a closed record: the row press only');
+});
+
 // The page's listener, with a stand-in document and held answers. A second copy of the module (its own per-chat state),
 // so the markup test above sees none of this.
 const on = {}, sent = [], answers = [];
