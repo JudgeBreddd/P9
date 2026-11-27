@@ -1160,7 +1160,7 @@ Written before the code (sprint spec D1, D3, D4).
   the way or the file itself is a link, P9 refuses it. Each file is at most 32,000 characters and is written whole
   (a temp file, then a rename).
 - **The review trail has one writer.** `review-trail.md` is P9's copy of its own review record: one row per item a
-  worker reported with `ready` (item, worker, commit, state, fix count, larger model), rewritten whole at each `ready`
+  worker reported with `ready` (item, worker, commit, state, fix count, third fix), rewritten whole at each `ready`
   and `verdict`. The project page and `set_rules` cannot write it, and an edit to it is replaced at the next write. A
   worker's work queue (its role's item lines in `sprint.md`) and its done count come from P9's record — an item counts
   when its reviewed head has reached the sprint's main line, which P9 proves in its own clone or copy of the repo

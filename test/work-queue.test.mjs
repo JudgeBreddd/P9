@@ -97,6 +97,7 @@ test('Work queue: ready takes the first item not passed, wakes the reviewer, ver
   // The trail: one file, P9 its only writer; the project page's save is refused.
   const trail = files.read(lead, 'review-trail.md');
   assert.match(trail, /^# Review trail/);
+  assert.match(trail, /\| Fix count \| Third fix \| When \|/, 'the column says what the flag records: three or more fixes');
   assert.match(trail, /\| daemon-1 \| Daemon \| [0-9a-f]{40} \| passed \| 3 \| yes \|/);
   assert.match(trail, /\| daemon-2 \| Daemon \| [0-9a-f]{40} \| queued \| 0 \|  \|/);
   assert.equal(files.write(lead, 'review-trail.md', 'mine'), false, 'another writer replaced the trail');
@@ -125,6 +126,10 @@ test('O243: the third fix asks for a step up from the worker\'s model: Fable onl
     // No live session: the newest config's model (gauge) says what it runs; a name with no family gets no names.
     assert.deepEqual(ask(null, sprint, 'fable'), ['[p9] daemon-1 by Daemon got its third fix.']);
     assert.deepEqual(ask('default', sprint), ['[p9] daemon-1 by Daemon got its third fix: give the correction to a larger model.']);
+    // Only a bare alias or a claude-<family>-... id names a family: a profile's custom id and opusplan (it runs on Sonnet) do not.
+    assert.deepEqual(ask('claude-opus-5-5', sprint), ['[p9] daemon-1 by Daemon got its third fix: give the correction to a larger model (Fable).']);
+    assert.deepEqual(ask('opus[1m]', sprint), ['[p9] daemon-1 by Daemon got its third fix: give the correction to a larger model (Fable).']);
+    for (const name of ['fable-proxy/small', 'opusplan']) assert.deepEqual(ask(name, sprint), ['[p9] daemon-1 by Daemon got its third fix: give the correction to a larger model.'], name);
   }
   console.log('PASS O243: third fix names only a step up');
 });
