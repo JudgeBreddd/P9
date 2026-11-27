@@ -1190,6 +1190,10 @@ function toolUpdate(tool, d) { if (typeof d.status === 'string') tool.status = d
 // Only one a row could take is kept (tried on a blank row), as a drawn row keeps only those (its ups, after toolUpdate).
 function putLoose(tool, list) { for (const d of list) try { toolUpdate(tool, d); upKept(tool.ups ??= [], d); } catch {} }
 const rowTakes = d => { try { toolUpdate({ t: 'tool' }, d); return true; } catch { return false; } };
+// O270: another agent's rows (a background Agent's commands, marked with the call that started it) can land between the
+// pieces of one reply. A piece of the same message (messageId) goes back onto that reply, so its rows sit after it and
+// a fenced block is never cut in two. The reply's own rows, or anything else between, still start a new block.
+const sameReply = (events, mid) => { if (mid == null) return null; for (let i = events.length - 1; i >= 0; i--) { const e = events[i]; if (e.t === 'agent') return e.mid === mid ? e : null; if (!(e.t === 'tool' && e.sub)) return null; } return null; };
 async function earlier(s) {
   const from = s.more, r = await window.p9.chat('events', { after: 0, only: [s.id], until: from - 1, tail: TAIL });
   // O251: a jump meanwhile made the chat a stub and read it again from its newest blocks; this page would skip what lies between.
@@ -1288,9 +1292,9 @@ function applyChat(ev, into) {
       if (d.sessionUpdate === 'agent_message_chunk' || d.sessionUpdate === 'agent_thought_chunk') {
         const t = d.sessionUpdate === 'agent_message_chunk' ? 'agent' : 'thought', text = d.content?.type === 'text' ? d.content.text : '', img = t === 'agent' && imgSrc(d.content), warn = t === 'agent' && agentWarning(text);
         if (warn) s.events.push({ t: 'warn', text: warn }); // the adapter's warning, a notice line above the reply (helpers.mjs)
-        else if (last?.t === t) { last.text += text; if (img) (last.images ||= []).push(img); } else s.events.push({ t, text, ...(img && { images: [img] }) });
+        else { const to = last?.t === t ? last : t === 'agent' && sameReply(s.events, d.messageId); if (to) { to.text += text; if (img) (to.images ||= []).push(img); } else s.events.push({ t, text, ...(img && { images: [img] }), ...(t === 'agent' && d.messageId != null && { mid: d.messageId }) }); }
       } else if (d.sessionUpdate === 'tool_call' && d.toolCallId != null && s.events.some(e => e.t === 'tool' && e.id === d.toolCallId)) { /* O266: after a compaction the adapter sends earlier calls again, pending, each followed by its update: the row it has is kept, not drawn twice and left pending */ }
-      else if (d.sessionUpdate === 'tool_call') { const tool = { t: 'tool', id: d.toolCallId, status: typeof d.status === 'string' ? d.status : 'pending', title: String(d.title || 'Tool call'), kind: d.kind, diff: toolDiff(d.content), output: toolText(d.content), images: toolImages(d.content), plan: planText(d) }; tool.files = editFiles(d, tool); s.events.push(tool);
+      else if (d.sessionUpdate === 'tool_call') { const tool = { t: 'tool', id: d.toolCallId, status: typeof d.status === 'string' ? d.status : 'pending', title: String(d.title || 'Tool call'), kind: d.kind, diff: toolDiff(d.content), output: toolText(d.content), images: toolImages(d.content), plan: planText(d), ...(d._meta?.claudeCode?.parentToolUseId && { sub: true }) }; tool.files = editFiles(d, tool); s.events.push(tool);
         const l = s.loose?.get(d.toolCallId); if (l) { s.loose.delete(d.toolCallId); putLoose(tool, l); } }
       // O219: a command's streamed output comes as pieces to add; O220: a failed or killed one's exit, a tag. O267b: one whose
       // call is not loaded (above the chat's newest blocks, or not drawn yet) is kept (s.loose) for when its row is drawn:
@@ -1470,7 +1474,9 @@ async function loadChat() {
   // Review rounds 4-8: a turn end applied after a newer turn started (both in one poll, or buffered by behind()) sends as
   // 'queue', so the daemon holds the message for that newer turn's end. None to a chat stopped or moving by then (a stop in
   // the same poll): the daemon would resume it.
-  const settle = (ended, answered_) => { try { for (const s of ended) { finished(s); turnEnd(s, free(s)); } for (const id of answered_) { const s = sess(id); if (s && !s.pending) answered(s); } } catch (e) { console.error('chat batch', e); } };
+  // O260: a chat that ended twice in one poll (its held message ran a whole turn there) finishes once, at its first end;
+  // turnEnd still runs for every end, in order.
+  const settle = (ended, answered_) => { try { const told = new Set(); for (const s of ended) { if (!told.has(s)) { told.add(s); finished(s); } turnEnd(s, free(s)); } for (const id of answered_) { const s = sess(id); if (s && !s.pending) answered(s); } } catch (e) { console.error('chat batch', e); } };
   // O249: an event for a chat not loaded yet waits with it while it loads (history up to the event before), then applies
   // in order; the loop goes on, so the shown chat's replies do not wait behind a busy chat's history over a slow link.
   // Review rounds 2-3: every buffered event applies first, so the chat's state is as it is now.
