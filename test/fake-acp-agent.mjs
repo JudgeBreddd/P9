@@ -159,6 +159,7 @@ const connection = acp.connectAgent(stream, {
     if (method !== '_session/steering' || !steering) throw acp.RequestError.methodNotFound(method);
     sprintRules(params.prompt);
     appendFileSync('steers.log', textOf(params.prompt) + '\n');
+    if (existsSync('order.log')) appendFileSync('order.log', 'steer ' + textOf(params.prompt) + '\n');
     if (!turns.has(params.sessionId) && process.argv[2] === 'codex') {
       const text = textOf(params.prompt);
       setTimeout(() => connection.sessionUpdate({ sessionId: params.sessionId, update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'got:' + text } } }), 300);
@@ -203,12 +204,16 @@ const connection = acp.connectAgent(stream, {
   // O273: overlaps.log, when present, gets a line for each set that arrives while another is unanswered; hang-model holds
   // a model set until the file goes; fail-mode refuses a mode set to the value it names; quiet-config answers a set
   // without naming any option (the mode included).
+  // O275: hang-mode holds a mode set (to the value it names, or any) until the file goes; order.log, when present, gets a
+  // line for each set answered, each prompt and each steer, in the order the agent saw them.
   async setSessionConfigOption(params) {
     if (inflight++ && existsSync('overlaps.log')) appendFileSync('overlaps.log', params.configId + '=' + params.value + '\n');
     try {
       if (params.configId === 'model' && existsSync('hang-model')) { writeFileSync('config-started', ''); while (existsSync('hang-model')) await new Promise((resolve) => setTimeout(resolve, 25)); }
+      if (params.configId === 'mode' && existsSync('hang-mode') && [String(params.value), ''].includes(readFileSync('hang-mode', 'utf8').trim())) { writeFileSync('config-started', ''); while (existsSync('hang-mode')) await new Promise((resolve) => setTimeout(resolve, 25)); }
       if (params.configId === 'mode' && existsSync('fail-mode') && readFileSync('fail-mode', 'utf8').trim() === String(params.value)) throw new Error('mode refused');
       const answer = await this.setOne(params);
+      if (existsSync('order.log')) appendFileSync('order.log', 'set ' + params.configId + '=' + params.value + '\n');
       return existsSync('quiet-config') ? {} : answer;
     } finally { inflight -= 1; }
   },
@@ -236,6 +241,7 @@ const connection = acp.connectAgent(stream, {
   },
   async prompt(params) {
     called('prompt');
+    if (existsSync('order.log')) appendFileSync('order.log', 'prompt ' + textOf(params.prompt) + '\n');
     const { sessionId } = params, say = (reply) => connection.sessionUpdate({ sessionId, update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: reply } } });
     // Like Claude Code's prompt queue: a prompt during the unprompted work is taken in at its next step.
     if (background.has(sessionId)) { await deliver(sessionId, textOf(params.prompt)); return { stopReason: 'end_turn' }; }
