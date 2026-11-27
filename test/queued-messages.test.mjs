@@ -464,6 +464,36 @@ test('O267 review 15: an Interrupt held while a start sets its model comes back 
   console.log('PASS O267 review 15: the stopped Interrupt came back into the box as ' + await box());
 });
 
+// O274 (#560 r1, r3): a queued message its turn refused as a setting failed (config-failed) comes back into the box with
+// its file, like any unsent message of the user's own; and one handed back under its earlier ID too (again) goes in once.
+test('O274: a queued message refused as a setting failed comes back into the box once, with its file', { timeout: 120000 }, async (t) => {
+  const { instance, id, launch, open, ends } = await setup(t, 'o274-config', ['no-steering']);
+  await until(async () => await ends() === 1, 'hello answered');
+  const { page } = await launch(), chat = await open(page);
+  await chat.send('gate'); // held until the go file: the turn the message waits behind
+  await page.locator('#navList .row[data-chat="' + id + '"] [data-busy]').waitFor({ timeout: 15000 });
+  const [chooser] = await Promise.all([page.waitForEvent('filechooser', { timeout: 10000 }), chat.pane.locator('[data-attach]').click()]);
+  await chooser.setFiles([{ name: 'keep.txt', mimeType: 'text/plain', buffer: Buffer.from('keep') }]);
+  await chat.pane.locator('.attach .att-file', { hasText: 'keep.txt' }).waitFor({ timeout: 10000 });
+  await chat.send('kept text');
+  await until(async () => (await said(instance, id, 'held')).some((e) => e.data.text === 'kept text'), 'the message is queued');
+  const held = (await said(instance, id, 'held')).find((e) => e.data.text === 'kept text').data.id;
+  const box = async () => JSON.stringify([await chat.pane.locator('.composer textarea').inputValue(), (await chat.pane.locator('.attach .att-file').allInnerTexts()).map((x) => x.split('\n')[0])]);
+  await until(async () => await box() === JSON.stringify(['', []]), 'the box emptied as it was queued');
+  // As the daemon writes it (unheldOnce): the first under its ID now, naming the earlier one; then the earlier one, again.
+  const db = new DatabaseSync(path.join(instance.directory, '.local/state/p9-foundation/p9.db'), { timeout: 5000 });
+  const add = (data) => db.prepare('INSERT INTO events (conversation, type, data, at) VALUES (?, ?, ?, ?)').run(id, 'unheld', JSON.stringify(data), Date.now());
+  add({ id: held, text: 'kept text', why: 'config-failed', was: ['q-before'] });
+  add({ id: 'q-before', text: 'kept text', why: 'config-failed', again: true });
+  add({ id: 'q-marker', text: 'marker', why: 'stopped', from: 'p9' }); // the last one: once told, the two before it are taken
+  db.close();
+  await chat.pane.locator('.hist').getByText('Not sent (stopped): marker').waitFor({ timeout: 15000 });
+  await until(async () => await box() === JSON.stringify(['kept text', ['keep.txt']]), 'the message and its file are back in the box, once (' + await box() + ')');
+  assert.equal(await chat.pane.locator('.hist').getByText('Not sent (config-failed)').count(), 0, 'put back, not told as not sent');
+  await writeFile(path.join(instance.workspace, 'go'), '');
+  console.log('PASS O274 config-failed: the box got ' + await box());
+});
+
 // #540 review 16 (O267b): a held message another chat or P9 sent (from) that comes back unsent is told as not sent; only
 // the user's own goes back in the box. Both are written into the ledger as the daemon writes them.
 test('O267b: a handed-back message another chat sent is told as not sent, not put in the box', { timeout: 120000 }, async (t) => {

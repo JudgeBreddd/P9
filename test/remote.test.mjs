@@ -319,7 +319,9 @@ test('Temporary or Always on in the window: the question, the status line, the a
     await page.click('#setBtn'); await page.locator('#setDlg[open]').waitFor(); await page.click('[data-set-page="Remote Connect"]');
     assert.equal(await page.locator('[data-remote-keep="small-board"]').inputValue(), 'stop');
     assert.equal(await page.locator('[data-remote-keep="test-host"]').inputValue(), '');
-    await page.locator('#setRemote').scrollIntoViewIfNeeded();
+    // O274: one step in the page, not a wait for a node: Settings draws itself again when a late read lands (O47), and a
+    // scroll waiting on the old #setRemote failed as no longer in the page.
+    await page.evaluate(() => document.getElementById('setRemote').scrollIntoView({ block: 'nearest' }));
     await shot('c34-settings-keep-' + theme, page.locator('#setRemote'));
     await page.keyboard.press('Escape');
   };

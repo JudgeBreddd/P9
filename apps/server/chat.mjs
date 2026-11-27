@@ -547,8 +547,9 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     const kept = gauges.get(conversation);
     if (kept && type === 'config') {
       if (data.model?.current) kept.model = data.model.current;
-      const effort = data.pickers?.find?.((o) => o.category === 'thought_level');
-      if (effort) kept.effort = effort.current;
+      // O274: a full config with no effort picker (a model that has none) clears the kept effort, or a worker row shows
+      // the last model's effort for one that has none.
+      if (Array.isArray(data.pickers)) kept.effort = data.pickers.find((o) => o.category === 'thought_level')?.current ?? null;
     } else if (kept && type === 'update' && data.sessionUpdate === 'usage_update') kept.context = contextOf(data) ?? kept.context;
     if (type === 'turn-end' || type === 'user') { const said = live.get(conversation)?.heard?.at(-1); if (said) said.over = true; } // repeated(), below
     try { ledger.append(conversation, type, data, measured.get(data)); }
@@ -558,6 +559,10 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     else if (type === 'unheld') settleResumed([data.id]);
     wakeAll(type, conversation);
   };
+  // O274: a message handed back unsent gets one 'unheld' per ID it waited under (each retires that ID), but only the first
+  // gives its text back: the rest say again, so a resumed message (was) or a joined one (held) is not put in the box twice.
+  // was on the first: the window looks the message's files up under any of them.
+  const unheldOnce = (chat, ids, text, data) => [...new Set(ids)].forEach((id, i) => emit(chat, 'unheld', { id, text, ...data, ...(i ? { again: true } : new Set(ids).size > 1 && { was: [...new Set(ids)].slice(1) }) }));
   // A resumed message that went into a running turn's queue (202 held) stays in resuming:<lead> as queued: <held id>
   // until a 'user' event carries that id (it reached the agent) or an 'unheld' names it (refused, replaced, cancelled):
   // the queue is memory, so a restart in between sends it again (resumeLeft). Hoisted: emit runs before the prefs helpers.
@@ -673,7 +678,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
         // O109: one a restart cut out of a turn's queue (was) goes in the mode it waited with, as at that turn's end; its
         // sender may not be running yet, so its mode now is not known.
         const picked = !allowed() ? { error: 'session-ended' } : narrow && !item.was ? narrow(item) : { mode: item.body.mode };
-        if (picked.error) { for (const id of [item.id, ...(item.was ?? [])]) emit(item.chat, 'unheld', { id, text: item.body.text, why: picked.error }); done(); continue; }
+        if (picked.error) { unheldOnce(item.chat, [item.id, ...(item.was ?? [])], item.body.text, { why: picked.error }); done(); continue; }
         setResuming(lead, resumingOf(lead).map((i) => (i.id === item.id ? { ...i, body: item.body, sending: db.prepare('SELECT max(cursor) AS c FROM events').get().c ?? 0 } : i)));
         const { repeat, ...kept } = item.body, body = { ...kept, ...(picked.mode !== undefined && { mode: picked.mode }), when: 'queue' };
         if (repeat) repeats.add(body);
@@ -682,7 +687,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
         origins.set(body, { lead, id: item.id }); // a busy chat holds it: hold() takes this entry over (O109 FIX1)
         // was: the ID it waited under before a restart, so its 'user' event clears it from the window.
         const result = await api.prompt(item.chat, body, item.was?.length ? item.was : undefined, item.from ?? undefined).catch(() => refused(500, 'resume-failed'));
-        if (result.status !== 202 && result.status !== 200) for (const id of [item.id, ...(item.was ?? [])]) emit(item.chat, 'unheld', { id, text: item.body.text, why: result.error ?? 'refused' });
+        if (result.status !== 202 && result.status !== 200) unheldOnce(item.chat, [item.id, ...(item.was ?? [])], item.body.text, { why: result.error ?? 'refused' });
         // Into a running turn's queue: hold() has already moved this entry to its new ID in the same write (O109 FIX1).
         done();
       }
@@ -1638,7 +1643,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
   }
   // Every way a waiting message leaves without being sent passes here, so a waiting question's asker is told here too.
   // from (#540 review 16): another chat's or P9's message; the window and the phone put only the user's own back in the box.
-  const unheld = (id, items, why) => { for (const item of items) { for (const x of [item.id, ...(item.was ?? [])]) emit(id, 'unheld', { id: x, text: item.body.text, why, ...(senders.has(item.body) && { from: senders.get(item.body) }) }); solos.get(item.body)?.end({ error: why }); } };
+  const unheld = (id, items, why) => { for (const item of items) { unheldOnce(id, [item.id, ...(item.was ?? [])], item.body.text, { why, ...(senders.has(item.body) && { from: senders.get(item.body) }) }); solos.get(item.body)?.end({ error: why }); } };
   // O188: each chat's count of turns and tool calls started (delegate.mjs: a worker's late wake is cancelled by either).
   const acts = new Map(), act = (id) => acts.set(id, (acts.get(id) ?? 0) + 1);
   function toolStep(id, session, update) {
@@ -1709,6 +1714,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     }
     const send = [];
     let text = '', images = [], mode, model, config = {}, rest = false;
+    const who = (b) => (mixed.has(b) ? b : senders.get(b));
     const agrees = (m, c, b) => (m === undefined || b.model === undefined || b.model === m) && Object.entries(b.config ?? {}).every(([k, v]) => c[k] === undefined || c[k] === v);
     for (const item of items.filter((x) => !gone.includes(x))) {
       // O246: new prompts are never mixed: a message from another sender (P9, another chat, the user) waits for a turn of
@@ -1724,7 +1730,8 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
         // O109 FIX1: a message that may be a repeat goes alone, so its label speaks for it only.
         || (send.length > 0 && (repeats.has(item.body) || repeats.has(send[0].body) || nows.has(item.body) || nows.has(send[0].body)))
         // O246: nor messages from different senders, or one sender's message would run in another's mode or under its rules.
-        || (send.length > 0 && senders.get(item.body) !== senders.get(send[0].body));
+        // O274: a joined prompt kept from before O246 (mixed) is a sender of its own, so it neither joins nor loses its record.
+        || (send.length > 0 && who(item.body) !== who(send[0].body));
       // rest: once one message waits for the next turn, so does every later one, or they would run out of order.
       if (rest || (send.length && (other || joined.length > MAX_TEXT || photos(images).length + photos(item.images).length > MAX_IMAGES || images.length + item.images.length - photos(images).length - photos(item.images).length > MAX_FILES))) { rest = true; session.queued.push(item); continue; }
       send.push(item); text = joined; images = [...images, ...item.images]; mode ??= item.body.mode; model ??= item.body.model; config = { ...config, ...item.body.config };
@@ -1735,7 +1742,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     // ponytail: since O246 send holds one sender only, so from.length > 1 no longer happens here. Left in so the O246 change
     // stays one condition; a cleanup can drop this branch (the mixed reading for kept lists stays).
     const from = [...new Set(send.map((item) => senders.get(item.body)))], body = { ...send.at(-1).body, ...(mode !== undefined && { mode }), ...(model !== undefined && { model }), ...(Object.keys(config).length && { config }), text, images };
-    if (from.length > 1) mixed.set(body, from);
+    if (from.length > 1 || mixed.has(send[0].body)) mixed.set(body, from.length > 1 ? from : mixed.get(send[0].body));
     else if (from[0]) titles.set(body, titles.get(send[0].body) ?? null); // O73 FIX1: one sender's queued messages keep its send-time title
     if (repeats.has(send[0].body)) repeats.add(body);
     const result = await authority.run(allowed, () => api.prompt(id, body, send.flatMap((item) => [item.id, ...(item.was ?? [])]), from.length > 1 ? undefined : from[0], solos.get(send[0].body), from.length > 1 ? send : undefined)).catch(() => refused(403, 'session-ended'));
@@ -1905,7 +1912,9 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       // O246 round 2: another chat's agent's text is quoted as it comes in, so a "[P9:" in it cannot pass as P9's own line,
       // whether it goes alone or told with others. notice: P9's own lines for it (send_chat's new role key), put in front
       // unquoted. Once only: not on its way back in from a turn's queue (held) or from Resume (origins).
-      if (ID.test(from ?? '') && !held && body && typeof body === 'object' && typeof body.text === 'string' && !origins.has(body)) { body.text = (typeof body.notice === 'string' ? body.notice : '') + quoted(body.text); delete body.notice; }
+      if (ID.test(from ?? '') && !held && body && typeof body === 'object' && typeof body.text === 'string' && !origins.has(body)) { body.text = (typeof body.notice === 'string' ? body.notice : '') + quoted(body.text); delete body.notice;
+        // O274: quoting and the notice add characters, so the cap is checked on what the agent gets, and named.
+        if (body.text.length > MAX_TEXT) return { status: 413, error: 'text-too-long', message: 'The message is over ' + MAX_TEXT + ' characters once quoted; nothing was sent.' }; }
       if (from && body && typeof body === 'object') { senders.set(body, from); if (!titles.has(body)) titles.set(body, titleOf(from)); }
       if (solo && body && typeof body === 'object') solos.set(body, solo);
       await recovered;
@@ -2397,7 +2406,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       if (!list) return [];
       db.exec('BEGIN');
       try { if (into) setPaused(lead, [...list, ...into].sort((a, b) => (a.seq ?? 0) - (b.seq ?? 0))); setPaused(worker, null); db.exec('COMMIT'); } catch (error) { db.exec('ROLLBACK'); throw error; }
-      if (!into) for (const item of list) for (const shown of item.held ?? [item.id]) emit(item.chat, 'unheld', { id: shown, text: item.body.text, why: 'stopped', ...(item.from && { from: item.from }) });
+      if (!into) for (const item of list) unheldOnce(item.chat, item.held ?? [item.id], item.body.text, { why: 'stopped', ...(item.from && { from: item.from }) });
       wakeAll('resumed');
       return into ? [] : list;
     },
@@ -2407,7 +2416,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     async resume(lead, narrow, resumed) {
       const list = pausedOf(lead);
       if (!list) return null;
-      for (const item of list) for (const shown of item.held ?? [item.id]) emit(item.chat, 'unheld', { id: shown, text: item.body.text, why: 'resumed' });
+      for (const item of list) unheldOnce(item.chat, item.held ?? [item.id], item.body.text, { why: 'resumed' });
       db.exec('BEGIN'); // moved in one step: a restart finds each message in one list, never both or neither
       try { setResuming(lead, [...resumingOf(lead), ...list]); setPaused(lead, null); db.exec('COMMIT'); } catch (error) { db.exec('ROLLBACK'); throw error; }
       wakeAll('resumed');

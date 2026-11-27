@@ -354,7 +354,9 @@ test('O267b: a chat whose read was refused as signed out does not read again on 
   await page.route((url) => url.pathname === '/login', (route) => route.fulfill({ status: 204 })); // the move to sign-in goes nowhere (a 204 keeps the page): as slow as can be
   const reads = [];
   await page.route((url) => url.pathname === '/chat/events' && url.searchParams.get('only') === id, (route) => { reads.push(Date.now()); return route.fulfill({ status: 401, contentType: 'application/json', body: JSON.stringify({ error: 'signed-out' }) }); });
-  await page.click(`[data-chat="${id}"]`);
+  // O274: pressed in the page, so the test waits for the line the row opens (below), not for the move to sign-in the 401
+  // starts: that move goes nowhere here, and a click left waiting for it timed out on a slow runner.
+  await page.evaluate((id) => document.querySelector(`[data-chat="${id}"]`).click(), id);
   const line = () => page.evaluate(() => document.querySelector('#events .empty')?.textContent ?? '');
   await until(async () => (await line()).startsWith('Chat is unavailable (signed-out).'), 'the signed-out line');
   await new Promise((resolve) => setTimeout(resolve, 5500)); // past the retry's 5 s

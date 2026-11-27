@@ -23,6 +23,9 @@ type Window = { usedPercent: number; resetsAt: number | null; windowMins?: numbe
 type Limits = { fiveHour: Window | null; sevenDay: Window | null; models?: (Window & { name: string })[]; asOf: number };
 const one = <T extends Element>(selector: string) => document.querySelector<T>(selector)!;
 const when = (ms: unknown) => new Date(Number(ms)).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+// P18 and #540 review 16: a held message handed back that goes into the box: the user's own (no from), cancelled by a Stop,
+// stopped before its turn, or (O274) refused as a setting failed. again: the same message under an earlier ID, already back.
+const boxed = (data: Json) => !data.from && !data.again && ['cancelled', 'stopped', 'config-failed', 'mode-failed'].includes(String(data.why));
 const escape = (value: unknown) => String(value ?? '').replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]!);
 // L1, O61: the message in the box is kept in this phone's storage, one per chat (label() runs on every change of it), so
 // a reload, a sign-in or opening another chat does not eat it or carry it into the wrong chat. boxFor is the chat whose
@@ -355,7 +358,7 @@ async function fetchEvents(wait = 0) {
     // P18: a Stop hands back the messages still held for its turn (as the desktop does): they go back in the box. So do
     // those of a start the chat's close, Stop or exit ended before its turn (stopped, #540 review 15).
     // #540 review 16: the user's own only; one another chat or P9 sent (from) is not put in the user's box.
-    for (const event of state.events) if (Number(event.cursor) > state.seen && event.type === 'unheld' && ['cancelled', 'stopped'].includes(String((event.data as Json)?.why)) && !(event.data as Json).from)
+    for (const event of state.events) if (Number(event.cursor) > state.seen && event.type === 'unheld' && boxed(event.data as Json))
       putBack(String(event.conversation), String((event.data as Json).text)); // O61: into its own chat's text, open or not
   }
   state.seen = state.cursor; localStorage.setItem('p9-cursor', String(state.cursor));
@@ -545,7 +548,7 @@ function foldBlocks(now: Folded, events: Json[]) {
     // refused) is told as not sent. The user's own taken back, cancelled or stopped goes into the box instead (fetchEvents).
     // Review round 2 finding 5: only one that really was not sent. Noted, resumed (it goes next) and replaced (its newer
     // text goes) are not failures, nor removed (the user's own x).
-    else if (kind === 'unheld' && !['noted', 'resumed', 'replaced', 'removed'].includes(String(data.why)) && (data.from || !['cancelled', 'stopped'].includes(String(data.why)))) add('note', 'Not sent (' + data.why + '): ' + data.text);
+    else if (kind === 'unheld' && !data.again && !['noted', 'resumed', 'replaced', 'removed'].includes(String(data.why)) && !boxed(data)) add('note', 'Not sent (' + data.why + '): ' + data.text);
     else if (kind === 'interrupted') { settle(); add('note', 'Stopped · The P9 daemon restarted mid-turn. Send again to resume.'); }
     else if (kind === 'exited' || kind === 'stopped') { settle(); add('note', 'Stopped · Send again to resume.'); }
   }

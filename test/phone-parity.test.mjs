@@ -594,6 +594,25 @@ test('P18: a handed-back message another chat sent does not go into the box', { 
   // Review round 2 finding 5: one that resumed or was replaced is not a failure: no "Not sent" line (written before the last).
   assert.ok(!(await page.textContent('#events')).includes('Not sent (resumed)') && !(await page.textContent('#events')).includes('Not sent (replaced)'));
 });
+// O274 (#560 r1, r3): the user's own message refused as a setting failed (config-failed) goes back in the box, and a
+// hand-back under its earlier ID (again) does not put it there a second time.
+test('O274: a message refused as a setting failed comes back to the box once, also when handed back under an earlier ID', { timeout: 90000 }, async (t) => {
+  const { page, server } = await phoneOn(t);
+  await newChat(page, 'claude');
+  await send(page, 'short');
+  await page.waitForFunction(() => document.querySelector('#prompt').value === '', null, { timeout: 15000 });
+  const id = (await server.desk('/chat')).body.conversations[0].id;
+  const { DatabaseSync } = await import('node:sqlite');
+  const db = new DatabaseSync(path.join(server.directory, '.local/state/p9-foundation/p9.db'), { timeout: 5000 });
+  const add = (data) => db.prepare('INSERT INTO events (conversation, type, data, at) VALUES (?, ?, ?, ?)').run(id, 'unheld', JSON.stringify(data), Date.now());
+  add({ id: 'q-new', text: 'kept', why: 'config-failed', was: ['q-old'] });
+  add({ id: 'q-old', text: 'kept', why: 'config-failed', again: true });
+  add({ id: 'q-other', text: 'marker', why: 'stopped', from: 'p9' });
+  db.close();
+  await page.waitForFunction(() => document.querySelector('#events').textContent.includes('Not sent (stopped): marker') && document.querySelector('#prompt').value.includes('kept'), null, { timeout: 20000 });
+  assert.equal(await page.inputValue('#prompt'), 'kept', 'once in the box');
+  assert.ok(!(await page.textContent('#events')).includes('Not sent (config-failed)'), 'put back, not told as not sent');
+});
 // #547 review: a GET /agents that landed after a new chat's start pick was drawn drew the Mode list again as "as set", so
 // the next prompt went without the pick.
 test('O267b: a late GET /agents keeps a new chat\'s start pick, and its prompt goes in it', { timeout: 90000 }, async (t) => {

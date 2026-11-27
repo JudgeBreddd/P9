@@ -128,7 +128,8 @@ const configOptions = () => [{ id: 'mode', name: 'Mode', type: 'select', current
   { id: 'model', name: 'Model', category: 'model', type: 'select', currentValue: existsSync('no-model') ? null : model,
     options: [...(listedModels() ?? [{ value: 'default', name: 'Default (recommended)' }, { group: 'more', name: 'More', options: [{ value: 'opus', name: 'Opus' }, { value: 'haiku', name: 'Haiku' }] }]), ...(custom ? [{ value: custom, name: 'Custom model' }] : [])] },
   // Like the real adapters: effort and fast mode; sandbox is a mode-category switch P9 must never offer (threat model row 22).
-  { id: 'effort', name: 'Effort', category: 'thought_level', type: 'select', currentValue: picked.effort, options: ['low', 'medium', 'high'].map((value) => ({ value, name: value[0].toUpperCase() + value.slice(1) })) },
+  // O274: no-effort in the workspace: a model with no effort picker.
+  ...(existsSync('no-effort') ? [] : [{ id: 'effort', name: 'Effort', category: 'thought_level', type: 'select', currentValue: picked.effort, options: ['low', 'medium', 'high'].map((value) => ({ value, name: value[0].toUpperCase() + value.slice(1) })) }]),
   { id: 'fast', name: 'Fast mode', category: 'model_config', type: 'select', currentValue: picked.fast, options: [{ value: 'on', name: 'On' }, { value: 'off', name: 'Off' }] },
   ...(process.argv[2] === 'codex' ? [{ id: 'collaboration_mode', name: 'Collaboration mode', category: 'collaboration_mode', type: 'select', currentValue: picked.collaboration_mode, options: [{ value: 'default', name: 'Default' }, { value: 'plan', name: 'Plan' }] }] : []),
   { id: 'sandbox', name: 'Sandbox', category: 'mode', type: 'select', currentValue: picked.sandbox, options: [{ value: 'on', name: 'On' }, { value: 'off', name: 'Off' }] }];
