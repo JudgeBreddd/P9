@@ -2,7 +2,7 @@ import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, protocol, session
 import { execFile, spawn } from 'node:child_process';
 import { appendFile, lstat, mkdir, mkdtemp, open, readFile, readdir, realpath, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { appendFileSync, constants, openSync, readFileSync, watch } from 'node:fs';
-import { createHash, randomBytes, randomUUID } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import os from 'node:os';
@@ -22,7 +22,7 @@ import { XFER_LIMITS, planFolder, resolve as resolveXfer, overLimit, runPlan, de
 import { ORIGIN, FILE_PROTECTION_RISK, FRAME_CSP, SIGN_IN_ORIGINS, DEVICE_CODE, signInUrl } from '../../packages/protocol/index.mjs';
 import { WebSocket } from 'ws';
 import { contextMenu, windowsFullName } from './native.mjs';
-import { startEditorHost, stopEditorHost, openInCode, hostWritable, installEditorHost, editorDownload, editorProblem, EDITOR_DIR, EDITOR_COMMIT, EDITOR_DOWNLOADS } from './editor-host.mjs';
+import { startEditorHost, stablePort, stopEditorHost, openInCode, hostWritable, installEditorHost, editorDownload, editorProblem, EDITOR_DIR, EDITOR_COMMIT, EDITOR_DOWNLOADS } from './editor-host.mjs';
 import { offReason, startUpdater, updateAction } from './updater.mjs';
 import { readState, writeState, begin, timedOut, healthy, quit, rolledBack, startHealthy, launcherCommand, promoteLauncher, readRollback, markShown,
   rollbackLog, sanitize, reportLink, shareRoot, START_MS } from './rollback.mjs';
@@ -218,9 +218,17 @@ export async function createDesktop({ state, open } = {}) {
   const sshKeyFile = path.join(app.getPath('userData'), 'ssh', 'p9_ed25519');
   useKey(sshKeyFile);
   let noKey = Array.isArray(saved?.noKey) ? saved.noKey.filter(named) : [];
-  // O250, listenRelay: host -> its editor ports, the one in use first. No prototype: a host may be named constructor.
+  // O250, O258 (stablePort): host ('' for this computer's own editor) -> its editor ports, the one in use first. No prototype: a host may be named constructor.
   const devPorts = Object.assign(Object.create(null), Object.fromEntries(Object.entries(saved?.devPorts && typeof saved.devPorts === 'object' ? saved.devPorts : {})
-    .map(([h, ports]) => [h, Array.isArray(ports) ? ports.filter(p => Number.isInteger(p) && p > 1023 && p < 65536) : []]).filter(([h, ports]) => named(h) && ports.length)));
+    .map(([h, ports]) => [h, Array.isArray(ports) ? ports.filter(p => Number.isInteger(p) && p > 1023 && p < 65536) : []]).filter(([h, ports]) => (h === '' || named(h)) && ports.length)));
+  // stablePort's kept and others for one editor; keepPort puts the port it got first and saves it.
+  const portsOf = key => [devPorts[key] ?? [], new Set(Object.entries(devPorts).flatMap(([h, ports]) => h === key ? [] : ports))];
+  const keepPort = (key, port) => {
+    const kept = devPorts[key] ?? [];
+    if (kept[0] === port) return;
+    devPorts[key] = [port, ...kept.filter(p => p !== port)];
+    keepServer().catch(error => console.error('p9: the editor port was not saved, the next start may open the editor empty:', error.message));
+  };
   // The agents each remote's slim Temporary P9 gets (claude, codex, both or none), asked once in the window
   // after connecting; the install there sends none, and fetchAgents below asks that daemon for these once connected.
   // agentsAgain: the machine menu's AI agents item asks again on this remote (this launch only).
@@ -1147,20 +1155,31 @@ export async function createDesktop({ state, open } = {}) {
   let hostQuit = null;
   app.once('will-quit', () => hostQuit?.());
   const startHost = () => editorHost ??= (async () => {
-    const unit = 'p9-editor-host-' + randomBytes(4).toString('hex'), quit = new AbortController();
-    hostQuit = () => { stopEditorHost(unit); quit.abort(); };
+    const quit = new AbortController();
+    let unit = null;
+    hostQuit = () => { if (unit) stopEditorHost(unit); quit.abort(); };
     // An install in progress (the AppImage's first start) finishes first, so Dev Focus opens instead of saying missing.
     await editorInstall?.catch(() => {});
-    return startEditorHost({ unit, signal: quit.signal }).catch(error => { quit.abort(); throw error; });
+    // O258: on a port that stays the same (stablePort, kept under '' in devPorts), as the remote editor's relay below. One taken
+    // between the pick and the host's own listen (a second P9 starting its editor at the same time) is passed over by the next pick.
+    for (let tries = 1; ; tries++) {
+      unit = 'p9-editor-host-' + randomBytes(4).toString('hex');
+      const port = await stablePort('', ...portsOf(''));
+      const started = await startEditorHost({ unit, signal: quit.signal, port }).catch(error => error);
+      if (started instanceof Error && started.message === 'editor-host-port-taken' && tries < 3 && !quit.signal.aborted) continue;
+      if (started instanceof Error) { quit.abort(); throw started; }
+      keepPort('', started.port);
+      return started;
+    }
   })().catch(error => { editorHost = null; throw error; });
   // Server mode (threat model row 50): the server's daemon runs the editor (POST /dev/editor) and the tunnel forwards its socket to
   // editor.sock in the state folder. A relay on 127.0.0.1 here carries the page's http and ws to it, so the page, its CSP and the
   // token check are the same as with a local editor host, which listens on 127.0.0.1 too. One relay, for the current server.
   let relay = null;
   // O250: the editor keeps its open files and file tree under its address, 127.0.0.1:<port>, so each remote keeps the port
-  // it got first (devPorts, in p9-server.json), and no two remotes get the same one. A new remote's starts at one picked from its
-  // name, the next 19 if taken or kept for another remote, any last. A kept port in use by something else at a start is
-  // given up for a new one (that start opens the editor empty) and stays kept for good, so no other remote opens onto its place.
+  // it got first (devPorts, in p9-server.json), and no two remotes (nor this computer's editor) get the same one (stablePort).
+  // A kept port in use by something else at a start is given up for a new one (that start opens the editor empty) and stays
+  // kept for good, so no other remote opens onto its place.
   // ponytail: no port is ever freed; the list grows only when a kept port is busy at a start (a few bytes each).
   const listenRelay = async (socket, host, old) => {
     old?.ready.then(l => l.close(), () => {});
@@ -1171,23 +1190,10 @@ export async function createDesktop({ state, open } = {}) {
       far.on('error', () => client.destroy());
       client.on('error', () => far.destroy());
     });
-    const kept = devPorts[host] ?? [], others = new Set(Object.entries(devPorts).flatMap(([h, ports]) => h === host ? [] : ports));
-    const near = 20000 + createHash('sha256').update(String(host)).digest().readUInt16BE(0) % 12000;
-    let refused = null;
-    for (const port of [...kept, ...Array.from({ length: 20 }, (_, i) => near + i).filter(p => !others.has(p)), 0, 0, 0]) {
-      refused = await new Promise(resolve => listener.once('error', resolve).listen(port, '127.0.0.1', () => resolve(null)));
-      // Any port (0) can be another remote's kept one: the system knows only the ports listened on now.
-      if (!refused && others.has(listener.address().port)) { refused = new Error('port-kept'); await new Promise(resolve => listener.close(resolve)); }
-      if (!refused) break;
-    }
-    if (refused) throw refused;
+    const port = await stablePort(host, ...portsOf(host), listener);
     // Switched to another machine while this bound: the port is not this remote's to keep (serverEditor drops the open).
     if (serverHost !== host) { listener.close(); throw Object.assign(new Error('daemon-unavailable'), { server: host }); }
-    const port = listener.address().port;
-    if (host && kept[0] !== port) {
-      devPorts[host] = [port, ...kept.filter(p => p !== port)];
-      keepServer().catch(error => console.error('p9: the editor port was not saved, the next start may open the editor empty:', error.message));
-    }
+    keepPort(host, port);
     return listener;
   };
   // The remote as the open began: an answer landing after a switch is that remote's, so it binds nothing and opens nothing.

@@ -1,7 +1,7 @@
 // Dev Focus: Monaco + VS Code services (the phase-2 editor, docs/spike-decision.md) against the desktop's loopback editor host.
 // Every write P9's editor makes inside the workspace goes through window.p9dev.save, which the desktop sends to the daemon's
 // guarded save (packages/files). Writes extensions, terminals or language servers make on the host are "runs as you, not guarded".
-import { initialize, getService, IFileService, IThemeService, IExtensionService, ITextFileService, IFileDialogService } from '@codingame/monaco-vscode-api';
+import { initialize, getService, IFileService, IThemeService, IExtensionService, ITextFileService, IFileDialogService, IStorageService } from '@codingame/monaco-vscode-api';
 import getWorkbench from '@codingame/monaco-vscode-workbench-service-override';
 import { folderError } from '../desktop/dev-folder.mjs';
 import getModel from '@codingame/monaco-vscode-model-service-override';
@@ -352,4 +352,12 @@ window.p9dev.onOpen(async request => {
     }
   } catch (error) { v.window.showErrorMessage('P9 could not open it: ' + error.message); }
 });
+// O258: the open files are saved when they change, not only every few seconds when the workbench is idle, so a quit, a
+// restart, an update or a switch of machines right after an open still finds them at the next start (the file tree saves
+// itself on each expand or collapse). 100 ms groups the several tab changes of one open; the gap is that plus the write.
+const storage = await getService(IStorageService);
+let saving = null;
+const saveSoon = () => { clearTimeout(saving); saving = setTimeout(() => storage.flush().catch(error => console.error('p9: the editor place was not saved:', error.message)), 100); };
+v.window.tabGroups.onDidChangeTabs(saveSoon);
+v.window.tabGroups.onDidChangeTabGroups(saveSoon);
 window.devFocusReady = true;

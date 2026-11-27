@@ -6,6 +6,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import { createReadStream, createWriteStream, existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
+import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { childEnv } from '../server/child-env.mjs';
@@ -26,6 +27,26 @@ export const EDITOR_DOWNLOADS = {
 };
 export const OPEN_LOG = win ? path.join(EDITOR_DIR, 'state', 'open-in-vscode.jsonl') : path.join(home, '.local', 'state', 'p9', 'open-in-vscode.jsonl');
 const LOOPBACK = '127.0.0.1';
+
+// O250, O258: the editor keeps its open files and file tree under its address, 127.0.0.1:<port>, so an editor's port is the
+// same at each start. Listens on the first free of: kept (the ports it had before, the last one first), one picked from its
+// name and the next 19 (less others, the ports kept for other editors), then any (never one of others). With a server, it
+// stays listening (the remote editor's relay); without, the port is only found free and handed to the editor host.
+export async function stablePort(name, kept = [], others = new Set(), server = null) {
+  const listener = server ?? net.createServer();
+  const near = 20000 + createHash('sha256').update(String(name)).digest().readUInt16BE(0) % 12000;
+  let refused = null;
+  for (const port of [...kept, ...Array.from({ length: 20 }, (_, i) => near + i).filter(p => !others.has(p)), 0, 0, 0]) {
+    refused = await new Promise(resolve => listener.once('error', resolve).listen(port, LOOPBACK, () => resolve(null)));
+    // Any port (0) can be another editor's kept one: the system knows only the ports listened on now.
+    if (!refused && others.has(listener.address().port)) { refused = new Error('port-kept'); await new Promise(resolve => listener.close(resolve)); }
+    if (!refused) break;
+  }
+  if (refused) throw refused;
+  const port = listener.address().port;
+  if (!server) await new Promise(resolve => listener.close(resolve));
+  return port;
+}
 
 // ponytail: the host dies with the app (Phase 9 makes sessions persistent).
 // Windows: the host runs in a Job Object made at process creation (scripts/windows-host.ps1 -Mode Job, as chats do); the
@@ -90,8 +111,9 @@ export async function hostWritable(data, file, kind = 'write') {
 
 // The caller may pick the unit name first, so it can register the quit handler before the host exists.
 // socket: a Unix socket path instead of a loopback port (the daemon's editor for Server mode, reached through the tunnel).
+// port: the loopback port (stablePort's); 0 is any. Taken by the time the host listens, the start fails with editor-host-port-taken.
 export async function startEditorHost({ host = process.env.P9_EDITOR_HOST ?? path.join(EDITOR_DIR, 'codium-server'), address = LOOPBACK, data = path.join(EDITOR_DIR, 'editor'),
-  unit = 'p9-editor-host-' + randomBytes(4).toString('hex'), timeout = 30000, signal, socket } = {}) {
+  unit = 'p9-editor-host-' + randomBytes(4).toString('hex'), timeout = 30000, signal, socket, port: listen = 0 } = {}) {
   if (address !== LOOPBACK) throw new Error('editor-host-loopback-only');
   if (process.platform !== 'linux' && !win) throw new Error('editor-host-unsupported-platform');
   const commit = JSON.parse(await readFile(path.join(host, 'product.json'), 'utf8')).commit;
@@ -110,7 +132,7 @@ export async function startEditorHost({ host = process.env.P9_EDITOR_HOST ?? pat
   const server = win ? [path.join(host, 'node.exe'), path.join(host, 'out', 'server-main.js')]
     : ['systemd-run', '--user', '--scope', '--quiet', '--collect', '--slice=' + SLICE, '--unit=' + unit, path.join(host, 'bin', 'codium-server')];
   const argv = [...server,
-    ...(socket ? ['--socket-path', socket] : ['--host', LOOPBACK, '--port', '0']), '--connection-token-file', tokenFile, '--user-data-dir', path.join(data, 'data'),
+    ...(socket ? ['--socket-path', socket] : ['--host', LOOPBACK, '--port', String(listen)]), '--connection-token-file', tokenFile, '--user-data-dir', path.join(data, 'data'),
     // Server state (workspaceStorage, which the Python extension writes on activation) defaults to ~/.vscodium-server, outside
     // the folder the dev view lets through; keep all of it in the owner-only data folder.
     '--server-data-dir', path.join(data, 'server'),
@@ -122,12 +144,14 @@ export async function startEditorHost({ host = process.env.P9_EDITOR_HOST ?? pat
   const port = await new Promise((resolve, reject) => {
     let output = '';
     const timer = setTimeout(() => reject(new Error('editor-host-timeout')), timeout);
+    // A port taken between the pick and the listen: the host logs the error and keeps running without listening.
+    const taken = () => { if (!socket && /Error: listen (EADDRINUSE|EACCES)/.test(output)) { clearTimeout(timer); reject(new Error('editor-host-port-taken')); } };
     child.stdout.on('data', chunk => {
       output += chunk;
       const match = /Extension host agent listening on (\S+)\s/.exec(output);
-      if (match) { clearTimeout(timer); resolve(socket ? null : Number(match[1])); }
+      if (match) { clearTimeout(timer); resolve(socket ? null : Number(match[1])); } else taken();
     });
-    child.stderr.on('data', chunk => { output += chunk; });
+    child.stderr.on('data', chunk => { output += chunk; taken(); });
     child.once('error', error => { clearTimeout(timer); reject(error); });
     child.once('exit', code => { clearTimeout(timer); reject(new Error('editor-host-exited: ' + code + ' ' + output.slice(-400))); });
   }).then(port => { if (signal?.aborted) throw new Error('editor-host-quit'); return port; })

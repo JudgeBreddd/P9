@@ -411,7 +411,7 @@ function history(id: string) {
 type Block = { kind: string; text: string; at?: string; id?: unknown; status?: string; detail?: string; exit?: string; request?: string; options?: Json[]; closed?: boolean; images?: string[]; files?: string[]; plan?: string; form?: Json[] | null; sent?: string[]; who?: Json; pinned?: boolean };
 // K8: Open lists chats this server runs; one moving or moved to another machine is history here.
 function isOpen(item: { state?: unknown }) { return !['stopped', 'moving', 'moved'].includes(String(item.state)); }
-type Attached = { mimeType?: string; data: string; name: string; file?: true }; // A2 step 1: file marks one that is not a photo
+type Attached = { mimeType?: string; data: string; name: string; file?: true; id?: string }; // A2 step 1: file marks one that is not a photo; O264: id, given when attached (not sent)
 // A2 step 6b: per chat, the quotes waiting above the message box (see openQuote). key: the reply's own (b + its time), which
 // finds it again after a redraw.
 type Quote = { text: string; comment: string; key: string };
@@ -1292,13 +1292,15 @@ for (const button of document.querySelectorAll<HTMLButtonElement>('#composer but
 async function submitFromBox(event: Event) {
   event.preventDefault(); const id = openId; const input = one<HTMLTextAreaElement>('#prompt');
   const art = artSending; artSending = null; // item 19: an artifact's comments, sent here as text only; the box and its images stay
-  const images = art === null ? attached.get(id) ?? [] : [], submitter = (event as SubmitEvent).submitter as HTMLButtonElement | null;
+  const submitter = (event as SubmitEvent).submitter as HTMLButtonElement | null, stop = submitter?.dataset.stop === 'true'; // what the tapped button was: forgetSent's redraw can turn Send into Stop
+  if (art === null) forgetSent(); // O264: a file another tab sent does not go again, even when this tab missed the storage event (a frozen page)
+  const images = art === null ? attached.get(id) ?? [] : [];
   // A2 step 6b: the chat's quotes go first, each with its comment (helpers.mjs quoted). A slash command goes as typed and
   // its quotes stay for the next message. ponytail: any text starting with / counts as a command here.
   const typed = (art ?? input.value).trim(), qs = art === null && !typed.startsWith('/') ? [...quotes.get(id) ?? []] : []; // a copy: the list can change while this is on its way
   // O21: Stop only when the box is empty at the tap. data-stop is from the last redraw, and text can reach the box with
   // no input event (a keyboard's own insert, dictation): that tap then stopped the turn, or did nothing, and sent nothing.
-  if (id && submitter?.dataset.stop === 'true' && art === null && !input.value.trim() && !images.length && !qs.length) {
+  if (id && stop && art === null && !input.value.trim() && !images.length && !qs.length) {
     const result = await mutate('/chat/' + encodeURIComponent(id) + '/cancel', {}, SEND_DEADLINE);
     if (result.body.error === 'no-turn') note('Nothing to stop: the turn had already ended.');
     else if (result.status !== 200) note(`Not stopped: ${result.body.error ?? result.status}`);
@@ -1347,7 +1349,7 @@ async function submitFromBox(event: Event) {
   const when = running(id) ? (submitter?.dataset.when ?? 'steer') : undefined, prompt = '/chat/' + encodeURIComponent(id) + '/prompt';
   // O62: kept without the images (they are attached still, and go last in the body as before), so it can be stored: see inFlight.
   const first = again ? inFlight.get(id)!.sent : { ...body, ...(when && { when }) };
-  const sent = { ...first, ...attachBody(images) };
+  const sending = [...images], sent = { ...first, ...attachBody(sending) }; // O264: the files that go, as they go (a ✕ while it is on its way changes the live list)
   inFlight.set(id, { draft, sent: first, pids: sentPids }); keepInFlight();
   const result = await mutate(prompt, sent, SEND_DEADLINE);
   // Only a definitive answer ends it. 'outcome-unknown' is the daemon still running the first try: the retry must be that same one.
@@ -1357,7 +1359,7 @@ async function submitFromBox(event: Event) {
   // A send of only files (a big paste is one, as pasted.txt) leaves the box alone: what was typed while it was on its way stays as it is.
   // O61, O62: the sent text leaves its own chat's box (the reader may be in another chat by now), and the picks that went with it
   // are no longer unsent: what the agent reports is the setting again.
-  if (result.status === 202) { spend(id, picked); if (art === null) { if (typed) editDraft(id, withoutSent); dropQuotes(id, qs); const left = (attached.get(id) ?? []).filter((image) => !images.includes(image)); if (left.length) attached.set(id, left); else attached.delete(id); } label(); note(); renderAttached(); void fetchEvents().then(render, () => {}); return true; } // the read is not awaited: the guard releases when the send is settled
+  if (result.status === 202) { spend(id, picked); if (art === null) { if (typed) editDraft(id, withoutSent); dropQuotes(id, qs); markSent(sending); const left = (attached.get(id) ?? []).filter((image) => !sending.includes(image)); if (left.length) attached.set(id, left); else attached.delete(id); } label(); note(); renderAttached(); void fetchEvents().then(render, () => {}); return true; } // the read is not awaited: the guard releases when the send is settled
   // Refused mid-turn (the agent takes no steering, or the turn is stopping or just ended): the message waits for the turn's end in the
   // phone's own queue, as the desktop does, and the box empties. Attachments do not queue, so they stay and the box says why.
   else if (result.status === 409 && result.body.error === 'turn-running' && art === null) {
@@ -1514,8 +1516,33 @@ function commentOnSelection() {
   import('./quote.mjs').then((m) => { const alive = quoteAlive(id); if (alive()) m.commentButton({ range: copy, raw, view: body, alive, pick: (rect: DOMRect) => openQuote(id, rect, text, raw, key) }); }, () => {});
 }
 let attachedRead = false; // until the kept images are read back, a redraw must not overwrite them with none
-function keepAttached() { if (!attachedRead) return; try { attachedStore('readwrite', (store) => { store.clear(); for (const [id, list] of attached) if (list.length) store.put(list, id); }); } catch {} }
-try { attachedStore('readonly', (store) => { const all = store.openCursor(); all.onerror = () => { attachedRead = true; }; all.onsuccess = () => { const at = all.result; if (!at) { attachedRead = true; return renderAttached(); } if (!attached.has(String(at.key))) attached.set(String(at.key), at.value as Attached[]); at.continue(); }; }); } catch {}
+// O264: the store's rewrite after an accepted send is not waited for, so a page killed before it lands brought the sent files back
+// on reload, and send sent them again. A sent file's id is a tombstone, kept in localStorage first (synchronous) and never retired:
+// the launch, every rewrite of the store and every send leave tombstoned files out, and another tab drops them when it hears of
+// them (the storage event), so a tab that still held one can neither write it back nor send it. Every localStorage access has
+// its own try, so the store never waits on it.
+// ponytail: the newest 200 ids across all chats (about 8 KB); an id older than 200 sends has had that long for its removal to land.
+const SENT = 'p9-attached-sent', SENT_CAP = 200;
+function sentIds(): string[] { let all: unknown = null; try { all = JSON.parse(localStorage.getItem(SENT) ?? 'null'); } catch {} return Array.isArray(all) ? all.filter((one) => typeof one === 'string') : []; }
+const unsent = (list: Attached[]) => { const gone = new Set(sentIds()); return list.filter((image) => !gone.has(image.id ?? '')); };
+// Read, add, cap and write in one synchronous step. ponytail: two tabs marking at the same instant can still lose one's ids.
+function markSent(images: Attached[]) {
+  const ids = images.flatMap((image) => image.id ? [image.id] : []);
+  if (ids.length) try { localStorage.setItem(SENT, JSON.stringify([...new Set([...sentIds(), ...ids])].slice(-SENT_CAP))); } catch {}
+}
+// Takes what another tab sent out of this tab's lists. A send on its way here keeps its own copy (submitFromBox's sending).
+function forgetSent() {
+  let changed = false;
+  for (const [chat, list] of attached) { const left = unsent(list); if (left.length === list.length) continue; changed = true; if (left.length) attached.set(chat, left); else attached.delete(chat); }
+  if (changed) renderAttached();
+}
+addEventListener('storage', (event) => { if (event.key === SENT || event.key === null) forgetSent(); });
+function keepAttached() { if (!attachedRead) return; try { attachedStore('readwrite', (store) => { store.clear(); for (const [id, list] of attached) { const left = unsent(list); if (left.length) store.put(left, id); } }); } catch {} }
+// A file kept before files had ids gets one made from where it is kept, the same on every launch and in every tab until a
+// rewrite stores it, so a send of it is left out on the next launch too.
+try { attachedStore('readonly', (store) => { const all = store.openCursor(); all.onerror = () => { attachedRead = true; }; all.onsuccess = () => { const at = all.result;
+  if (!at) { attachedRead = true; return renderAttached(); }
+  const id = String(at.key), list = unsent((at.value as Attached[]).map((image, i) => image.id ? image : { ...image, id: `old:${id}:${i}:${image.data?.length}` })); if (!attached.has(id) && list.length) attached.set(id, list); at.continue(); }; }); } catch {}
 const chipName = (q: Quote) => q.comment ? escape(q.comment.slice(0, 60)) : `“${escape(q.text.replace(/\s+/g, ' ').trim().slice(0, 40))}”`;
 // The chips' HTML as last drawn: a redraw that changes nothing keeps the buttons, so a tap or the focus on one is not lost.
 let attachedHtml = '';
@@ -1540,7 +1567,7 @@ async function attachNow(id: string, files: Iterable<File>) {
   for (const file of files) {
     const full = attachFull(file, attached.get(id) ?? []); if (full) { ok = false; say('Not attached: ' + full.toLowerCase() + '.'); continue; }
     // the list as it is now: a send answered meanwhile took its own files from it
-    try { const got = await readAttachment(file, attached.get(id) ?? []); attached.set(id, [...attached.get(id) ?? [], got]); } catch (error) { ok = false; say(`Not attached: ${file.name}: ${(error as Error)?.message ?? error}.`); }
+    try { const got: Attached = { ...await readAttachment(file, attached.get(id) ?? []), id: crypto.randomUUID() }; attached.set(id, [...attached.get(id) ?? [], got]); } catch (error) { ok = false; say(`Not attached: ${file.name}: ${(error as Error)?.message ?? error}.`); }
   }
   renderAttached(); return ok;
 }
