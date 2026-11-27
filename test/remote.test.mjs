@@ -1628,7 +1628,8 @@ test('ssh-missing, and a dropped connection is a notification', { timeout: 10000
 // O250: the editor keeps its place. Files open and a folder expanded in the server's Dev Focus are still there after time in
 // Chat focus, after going to This computer and back to the remote (not closed), after P9 there restarts (an update, an idle
 // stop), and after P9 here restarts: the workbench keeps them per workspace, and the workspace is the same each time.
-test('O250 Dev Focus on a remote keeps its open files and file tree through Chat focus, This computer and back, and restarts', { skip, timeout: 420000 }, async (t) => {
+// O258: the same for this computer's own editor through a restart of P9 here.
+test('O250 Dev Focus on a remote keeps its open files and file tree through Chat focus, This computer and back, and restarts; O258 on this computer too', { skip, timeout: 540000 }, async (t) => {
   const editor = await editorFor();
   if (!editor) return t.skip('needs the editor server (P9_EDITOR_HOST, or the fixtures reh.tar.gz)');
   const remote = await editorDaemon(t, editor), local = await daemon(t), s = await stage(remote);
@@ -1636,7 +1637,8 @@ test('O250 Dev Focus on a remote keeps its open files and file tree through Chat
   await mkdir(profile); await mkdir(path.join(remote.workspace, 'sub'));
   await writeFile(path.join(profile, 'p9-server.json'), JSON.stringify({ host: 'test-host', remotes: ['test-host'] }));
   for (const name of ['a.txt', 'b.txt', 'sub/inner.txt']) await writeFile(path.join(remote.workspace, name), name + '\n');
-  const env = { ...process.env, P9_SSH: s.ssh, XDG_RUNTIME_DIR: s.local, HOME: s.directory, P9_EDITOR_HOST: editor.host };
+  // PATH: this computer's editor (O258) starts through the same systemd-run as the remote's (a stand-in in the dev space).
+  const env = { ...process.env, PATH: editor.path, P9_SSH: s.ssh, XDG_RUNTIME_DIR: s.local, HOME: s.directory, P9_EDITOR_HOST: editor.host };
   delete env.ELECTRON_RUN_AS_NODE;
   let app, shell;
   // The port the remote's name picks is taken by something else at the first open, then freed: the restart below still
@@ -1644,26 +1646,34 @@ test('O250 Dev Focus on a remote keeps its open files and file tree through Chat
   const holder = createServer().listen(20000 + createHash('sha256').update('test-host').digest().readUInt16BE(0) % 12000, '127.0.0.1');
   await once(holder, 'listening');
   t.after(() => holder.close());
-  const launch = async () => {
+  // on: the machine P9 opens on, '' for this computer.
+  const launch = async (on = 'test-host') => {
     app = await _electron.launch({ args: [path.join(root, 'apps/desktop/start.cjs'), '--state', local.state, '--user-data-dir=' + profile], env, chromiumSandbox: true, timeout: 20000 });
     const mine = app, proc = app.process();
     t.after(async () => { await Promise.race([mine.close(), sleep(15000)]); proc.kill(); });
     shell = await app.firstWindow();
     // Connected, not the badge: a window that asked while the tunnel came up reloads once it answers, and eats a key pressed before.
-    await shell.locator('#daemonStatus', { hasText: 'Connected to test-host' }).waitFor({ timeout: 30000 });
+    if (on) await shell.locator('#daemonStatus', { hasText: 'Connected to ' + on }).waitFor({ timeout: 30000 });
+    else await shellReady(shell, { timeout: 30000 });
   };
   const badge = text => shell.locator('#serverBadge', { hasText: text }).waitFor({ timeout: 30000 });
-  // Dev Focus shown, on the remote's editor and ready (not the page it replaces, nor the unavailable page).
-  const devFocus = async () => {
+  // Dev Focus shown, on the remote's editor (or this computer's, '') and ready (not the page it replaces, nor the unavailable page).
+  const devFocus = async (want = 'test-host') => {
     await shell.keyboard.press('Control+2');
     for (let i = 0; ; i++) {
       const dev = app.windows().find(page => page.url().startsWith('p9://dev/'));
-      const on = await dev?.evaluate(async () => window.devFocusReady && (await window.p9dev.config()).server).catch(() => null);
-      if (on === 'test-host') return dev;
-      if (i === 240) assert.fail('Dev Focus did not open on the remote: ' + await dev?.locator('#cause').textContent().catch(() => ''));
+      const on = await dev?.evaluate(async () => window.devFocusReady ? (await window.p9dev.config()).server ?? '' : null).catch(() => null);
+      if (on === want) return dev;
+      if (i === 240) assert.fail('Dev Focus did not open on ' + (want || 'this computer') + ': ' + await dev?.locator('#cause').textContent().catch(() => ''));
       await sleep(500);
     }
   };
+  const openSome = d => d.evaluate(async () => {
+    const { v, open, root } = window.devFocus;
+    await open('a.txt'); await open('b.txt');
+    await v.commands.executeCommand('workbench.view.explorer');
+    await v.commands.executeCommand('revealInExplorer', v.Uri.joinPath(v.Uri.parse(root.toString()), 'sub', 'inner.txt'));
+  });
   // What the editor shows: its tabs, and the file tree's rows (inner.txt only while sub is expanded).
   const place = d => d.evaluate(() => ({ tabs: window.devFocus.v.window.tabGroups.all.flatMap(g => g.tabs.map(tab => tab.label)).sort(),
     tree: [...document.querySelectorAll('.explorer-folders-view .monaco-list-row')].map(row => row.textContent.trim()).filter(Boolean) }));
@@ -1675,12 +1685,7 @@ test('O250 Dev Focus on a remote keeps its open files and file tree through Chat
   };
   await launch();
   let dev = await devFocus();
-  await dev.evaluate(async () => {
-    const { v, open, root } = window.devFocus;
-    await open('a.txt'); await open('b.txt');
-    await v.commands.executeCommand('workbench.view.explorer');
-    await v.commands.executeCommand('revealInExplorer', v.Uri.joinPath(v.Uri.parse(root.toString()), 'sub', 'inner.txt'));
-  });
+  await openSome(dev);
   await kept(dev, 'before');
   const first = (await dev.evaluate(() => window.p9dev.config())).port;
   assert.notEqual(first, holder.address().port, 'the taken port is passed over');
@@ -1718,4 +1723,31 @@ test('O250 Dev Focus on a remote keeps its open files and file tree through Chat
   const now = (await dev.evaluate(() => window.p9dev.config())).port;
   await kept(dev, 'after P9 here restarted (editor port ' + port + ', now ' + now + ')');
   assert.equal(now, first, 'the editor port the remote first got, though the one its name picks is free now');
+  // O258: this computer's editor, on its own port picked the same way (from '', its fixed name), taken at the first start
+  // and freed, as above: P9 here restarts, and the editor opens on the port it first got, with its place.
+  await mkdir(path.join(local.workspace, 'sub'));
+  for (const name of ['a.txt', 'b.txt', 'sub/inner.txt']) await writeFile(path.join(local.workspace, name), name + '\n');
+  const here = createServer().listen(20000 + createHash('sha256').update('').digest().readUInt16BE(0) % 12000, '127.0.0.1');
+  await once(here, 'listening');
+  t.after(() => here.close());
+  await shell.keyboard.press('Control+1');
+  await shell.locator('#serverBadge').click();
+  await shell.locator('#serverPop [data-server-go=""]').click();
+  await badge('Local');
+  dev = await devFocus('');
+  await openSome(dev);
+  await kept(dev, 'this computer, before');
+  const mine = (await dev.evaluate(() => window.p9dev.config())).port;
+  assert.notEqual(mine, here.address().port, 'the taken port is passed over');
+  assert.notEqual(mine, first, 'not the remote\'s kept port');
+  here.close();
+  // The workbench saves its state each 60 s (its storage's flush interval), so a quit sooner keeps nothing whatever the port.
+  await sleep(70000);
+  await app.close();
+  await launch('');
+  dev = await devFocus('');
+  const again = (await dev.evaluate(() => window.p9dev.config())).port;
+  await kept(dev, 'this computer, after P9 here restarted (editor port ' + mine + ', now ' + again + ')');
+  assert.equal(again, mine, 'the editor port this computer first got, though the one its name picks is free now');
+  console.log('PASS O250 and O258: the editor keeps its place on the remote and on this computer, editor ports ' + first + ' and ' + mine);
 });
