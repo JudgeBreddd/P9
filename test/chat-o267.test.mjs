@@ -740,3 +740,19 @@ test('O275 T10: a batch of two senders stopped before it went hands each message
   assert.equal((await lines(path.join(dir, 'calls.log'))).filter((l) => l.endsWith(' prompt')).length, 1, 'the batch was sent');
   console.log('PASS O275 T10: each message went back to its own sender, nothing sent');
 });
+
+test('O275 T11: in a locked chat, a message sent while the turn waits on a question declines it and runs as the next prompt', async (t) => {
+  const { chat, dir, id, seen, until } = await setup(t, 'o275-t11');
+  await writeFile(path.join(dir, 'order.log'), '');
+  assert.equal((await chat.setLock({ on: true })).on, true);
+  assert.equal((await chat.prompt(id, { text: 'ask' })).status, 202);
+  await until((e) => e.type === 'question' || e.type === 'request' || e.type === 'elicitation', 'the turn waits on a question');
+  const s = await chat.prompt(id, { text: 'nudge' });
+  assert.equal(s.status, 202, JSON.stringify(s));
+  await until((e) => e.type === 'answered' && e.data?.answer?.action === 'cancel', 'the question was declined');
+  await until(echoed('nudge'), 'the message ran as the next prompt');
+  const log = await order(dir);
+  assert.ok(!log.some(sent('steer', 'nudge')), 'steered under the lock: ' + JSON.stringify(log));
+  assert.ok(seen.some(said('ask:' + JSON.stringify({ action: 'cancel' }))), 'the question ended declined');
+  console.log('PASS O275 T11: the question was declined and the message ran after it, not steered');
+});

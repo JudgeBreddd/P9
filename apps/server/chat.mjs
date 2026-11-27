@@ -1541,7 +1541,9 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     // request: a steer never waits, so a Stop never misses one. 409: the message waits for the turn's end (the caller holds
     // it) and goes as a prompt, which meets the barrier. Round 3: never while the lock is on, even confirmed: an agent
     // can keep the permissions a turn started with (Codex does), so a steer would run writable in a turn begun unlocked.
-    if (locked || admit(session)) return refused(409, 'turn-running');
+    // Round 4: refused, it still declines an open question as a steer does, or a turn waiting on the owner would hold
+    // the message behind it for good.
+    if (locked || admit(session)) { stillAuthorized(); decline(id, session, body); return refused(409, 'turn-running'); }
     if (photos(images).length && !session.capabilities.promptCapabilities?.image) return refused(400, 'images-unsupported');
     stillAuthorized();
     decline(id, session, body);
