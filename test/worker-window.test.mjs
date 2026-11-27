@@ -163,11 +163,11 @@ test('I3 worker window: Details shows tokens used and the context of its limit, 
 
 // The page's own stylesheet in a real browser, with Details open: the item names get their room beside the state pill, and a
 // long last reply with no spaces wraps inside its box instead of scrolling sideways.
-const shown = async (t, html) => {
+const shown = async (t, html, width = 740) => {
   const css = fs.readFileSync(new URL('../apps/web/src/styles/projects.css', import.meta.url), 'utf8');
   const browser = await chromium.launch(); t.after(() => browser.close());
   const page = await browser.newPage({ viewport: { width: 900, height: 900 } });
-  await page.setContent(`<style>${css}</style><div class="ppage" style="width:740px">${html}</div>`);
+  await page.setContent(`<style>${css}</style><div class="ppage" style="width:${width}px">${html}</div>`);
   await page.evaluate(() => document.querySelectorAll('[data-sv-look]').forEach((x) => { x.hidden = false; }));
   return page;
 };
@@ -189,6 +189,16 @@ test('I3 worker window: in the browser an item name is not cut to one character 
   const plan = await page.evaluate(() => [...document.querySelectorAll('li[data-sv-item]')].map((li) => { const c = getComputedStyle(li); return [c.display, c.gridTemplateColumns.split(' ').length]; }));
   assert.ok(plan.length >= 2, 'the plan list is drawn');
   for (const x of plan) assert.deepEqual(x, ['grid', 4]);
+});
+
+// O274 (#559 review): in a narrow worker window a long item name wraps onto more lines instead of ending in an ellipsis.
+test('I3 worker window: in the browser a long item name wraps in a narrow window, not cut with an ellipsis', browserTest, async (t) => {
+  const text = 'B1: draw the beds page with every bed, its plants, the watering days and the harvest notes for the season';
+  const page = await shown(t, statusHtml(s([w('a', { look: { git: null, notes: null, reply: null } })], [{ id: 'B1', text, role: 'a', ticked: false }]), esc), 320);
+  const r = await page.evaluate(() => { const n = document.querySelector('[data-sv-litem] .sv-text'); return { text: n.textContent, full: n.scrollWidth, box: n.clientWidth, tall: n.clientHeight, line: parseFloat(getComputedStyle(n).lineHeight) || 16 }; });
+  assert.equal(r.text, text);
+  assert.ok(r.full <= r.box, `the whole name shows: ${r.box} px for ${r.full} px of text`);
+  assert.ok(r.tall > r.line * 1.5, `it wraps onto more lines: ${r.tall} px tall`);
 });
 
 test('I3 worker window: in the browser a last reply with no spaces wraps, with no sideways scroll', browserTest, async (t) => {

@@ -548,8 +548,9 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     const kept = gauges.get(conversation);
     if (kept && type === 'config') {
       if (data.model?.current) kept.model = data.model.current;
-      const effort = data.pickers?.find?.((o) => o.category === 'thought_level');
-      if (effort) kept.effort = effort.current;
+      // O274: a full config with no effort picker (a model that has none) clears the kept effort, or a worker row shows
+      // the last model's effort for one that has none.
+      if (Array.isArray(data.pickers)) kept.effort = data.pickers.find((o) => o.category === 'thought_level')?.current ?? null;
     } else if (kept && type === 'update' && data.sessionUpdate === 'usage_update') kept.context = contextOf(data) ?? kept.context;
     if (type === 'turn-end' || type === 'user') { const said = live.get(conversation)?.heard?.at(-1); if (said) said.over = true; } // repeated(), below
     try { ledger.append(conversation, type, data, measured.get(data)); }
@@ -1710,6 +1711,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     }
     const send = [];
     let text = '', images = [], mode, model, config = {}, rest = false;
+    const who = (b) => (mixed.has(b) ? b : senders.get(b));
     const agrees = (m, c, b) => (m === undefined || b.model === undefined || b.model === m) && Object.entries(b.config ?? {}).every(([k, v]) => c[k] === undefined || c[k] === v);
     for (const item of items.filter((x) => !gone.includes(x))) {
       // O246: new prompts are never mixed: a message from another sender (P9, another chat, the user) waits for a turn of
@@ -1725,7 +1727,8 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
         // O109 FIX1: a message that may be a repeat goes alone, so its label speaks for it only.
         || (send.length > 0 && (repeats.has(item.body) || repeats.has(send[0].body) || nows.has(item.body) || nows.has(send[0].body)))
         // O246: nor messages from different senders, or one sender's message would run in another's mode or under its rules.
-        || (send.length > 0 && senders.get(item.body) !== senders.get(send[0].body));
+        // O274: a joined prompt kept from before O246 (mixed) is a sender of its own, so it neither joins nor loses its record.
+        || (send.length > 0 && who(item.body) !== who(send[0].body));
       // rest: once one message waits for the next turn, so does every later one, or they would run out of order.
       if (rest || (send.length && (other || joined.length > MAX_TEXT || photos(images).length + photos(item.images).length > MAX_IMAGES || images.length + item.images.length - photos(images).length - photos(item.images).length > MAX_FILES))) { rest = true; session.queued.push(item); continue; }
       send.push(item); text = joined; images = [...images, ...item.images]; mode ??= item.body.mode; model ??= item.body.model; config = { ...config, ...item.body.config };
@@ -1736,7 +1739,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     // ponytail: since O246 send holds one sender only, so from.length > 1 no longer happens here. Left in so the O246 change
     // stays one condition; a cleanup can drop this branch (the mixed reading for kept lists stays).
     const from = [...new Set(send.map((item) => senders.get(item.body)))], body = { ...send.at(-1).body, ...(mode !== undefined && { mode }), ...(model !== undefined && { model }), ...(Object.keys(config).length && { config }), text, images };
-    if (from.length > 1) mixed.set(body, from);
+    if (from.length > 1 || mixed.has(send[0].body)) mixed.set(body, from.length > 1 ? from : mixed.get(send[0].body));
     else if (from[0]) titles.set(body, titles.get(send[0].body) ?? null); // O73 FIX1: one sender's queued messages keep its send-time title
     if (repeats.has(send[0].body)) repeats.add(body);
     const result = await authority.run(allowed, () => api.prompt(id, body, send.flatMap((item) => [item.id, ...(item.was ?? [])]), from.length > 1 ? undefined : from[0], solos.get(send[0].body), from.length > 1 ? send : undefined)).catch(() => refused(403, 'session-ended'));
@@ -1906,7 +1909,9 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       // O246 round 2: another chat's agent's text is quoted as it comes in, so a "[P9:" in it cannot pass as P9's own line,
       // whether it goes alone or told with others. notice: P9's own lines for it (send_chat's new role key), put in front
       // unquoted. Once only: not on its way back in from a turn's queue (held) or from Resume (origins).
-      if (ID.test(from ?? '') && !held && body && typeof body === 'object' && typeof body.text === 'string' && !origins.has(body)) { body.text = (typeof body.notice === 'string' ? body.notice : '') + quoted(body.text); delete body.notice; }
+      if (ID.test(from ?? '') && !held && body && typeof body === 'object' && typeof body.text === 'string' && !origins.has(body)) { body.text = (typeof body.notice === 'string' ? body.notice : '') + quoted(body.text); delete body.notice;
+        // O274: quoting and the notice add characters, so the cap is checked on what the agent gets, and named.
+        if (body.text.length > MAX_TEXT) return { status: 413, error: 'text-too-long', message: 'The message is over ' + MAX_TEXT + ' characters once quoted; nothing was sent.' }; }
       if (from && body && typeof body === 'object') { senders.set(body, from); if (!titles.has(body)) titles.set(body, titleOf(from)); }
       if (solo && body && typeof body === 'object') solos.set(body, solo);
       await recovered;

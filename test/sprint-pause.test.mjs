@@ -363,7 +363,11 @@ test('Hold one worker: a held worker starts no turn for the lead\'s message, lis
   assert.match(toLead[0], /hold-two/);
   for (const notice of [toLead[0], toW2[0]]) { assert.match(notice, /a combined message/); assert.doesNotMatch(notice, /words-of-w2/, 'a combined message was quoted'); }
   assert.doesNotMatch(toW2[0], /hold-two/, 'w2 was shown the lead\'s message');
-  assert.doesNotMatch(fs.readFileSync(path.join(root, 'apps/server/delegate.mjs'), 'utf8'), /'sprint-dropped/, 'Close notices keep a replacement key');
+  // O274 (#549 r3): nor any other key: the Close notice's call ends at its text, so a renamed key fails too.
+  const closing = fs.readFileSync(path.join(root, 'apps/server/delegate.mjs'), 'utf8').split('\n').filter((l) => l.includes("notify(from, 'sprint', '[p9] The sprint closed"));
+  assert.doesNotMatch(closing.join('\n'), /'sprint-dropped/, 'Close notices keep a replacement key');
+  assert.equal(closing.length, 1, 'one Close notice call');
+  assert.match(closing[0].trimEnd(), /: ''\)\);$/, 'the Close notice is sent with no key: ' + closing[0].slice(-60));
   // Review 15: a closed sprint holds no worker again, even from its lead reopened by the owner.
   const mark = await cursor(instance);
   await call(instance, `/chat/${sprint}/prompt`, 'POST', { text: 'mcp' });

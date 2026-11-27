@@ -1286,6 +1286,15 @@ test('projects: Sprint View shows a started sprint\'s items, time and chats from
   // A chat's row opens that chat.
   await lead.click();
   await until(async () => await page.locator('#projPage').isHidden(), 'the lead\'s row never opened its chat');
+  // O274 (#559 r1): a stopped chat's Open chat in Details opens that chat (a press, not only its markup).
+  await page.locator(`#navList [data-proj="${p.id}"]`).click();
+  await btn(run.sprint).click();
+  await view.waitFor({ timeout: 15000 });
+  await call(instance, `/chat/${run.sprint}/stop`, 'POST', {});
+  if ((await lookBtn.getAttribute('aria-expanded')) !== 'true') await lookBtn.click();
+  await li.locator('[data-sv-stopped]').waitFor({ timeout: 15000 });
+  await li.locator('.sv-btns [data-chat]').click();
+  await until(async () => await page.locator('#projPage').isHidden() && await page.locator(`.pane[data-id="${run.sprint}"]`).isVisible(), 'Open chat on the stopped lead never opened its chat');
   assert.deepEqual(errors, []);
   console.log('PASS Sprint View: Sprint Setup had none; scripts counted once each (2 running, 1 waiting); the started sprint opened as Sprint View with 0 of 3 items merged, 1 of 3 ticked, its time, the three items with their roles, the lead with its model, effort and state, all equal to the status route; the page followed a box ticked on disk; the lead\'s row opened its chat');
 });
