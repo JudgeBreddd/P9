@@ -1055,8 +1055,10 @@ function cancelTurn(s, quiet) {
 // The end of a turn applies a queued mode, then sends the next queued message.
 // Threat model row 21 (no notice when a turn ended): a live turn-end nobody is watching leaves an
 // "<agent> finished" card, and a desktop notice while the window is in the background. Only P9's words, never reply text.
+// O260: a chat goes on while a turn runs after this end (prompted: its user event came in the same poll) or while the
+// daemon holds a message it sends at the end; one held for a paused sprint and a note (info) start no turn.
 function finished(s) {
-  if (s.queue.length) return;
+  if (s.queue.length || s.prompted || s.held?.some(h => !h.info && h.when !== 'pause')) return;
   const onScreen = document.hasFocus() && (outer.S.focus === 'chat' && (outer.S.split ? outer.S.open.slice(0, 2) : outer.S.open.slice(0, 1)).includes(s.id) || outer.mdl.open && outer.S.modal?.kind === 'chat' && outer.S.modal.id === s.id);
   if (onScreen) return;
   s.done = true; outer.keepUnseen();
@@ -1469,7 +1471,8 @@ async function loadChat() {
   // Review rounds 4-8: a turn end applied after a newer turn started (both in one poll, or buffered by behind()) sends as
   // 'queue', so the daemon holds the message for that newer turn's end. None to a chat stopped or moving by then (a stop in
   // the same poll): the daemon would resume it.
-  const settle = (ended, answered_) => { try { for (const s of ended) { finished(s); turnEnd(s, free(s)); } for (const id of answered_) { const s = sess(id); if (s && !s.pending) answered(s); } } catch (e) { console.error('chat batch', e); } };
+  // O260: a chat whose held message ran a whole turn in the same poll ended twice there; it finished once (a Set).
+  const settle = (ended, answered_) => { try { for (const s of new Set(ended)) { finished(s); turnEnd(s, free(s)); } for (const id of answered_) { const s = sess(id); if (s && !s.pending) answered(s); } } catch (e) { console.error('chat batch', e); } };
   // O249: an event for a chat not loaded yet waits with it while it loads (history up to the event before), then applies
   // in order; the loop goes on, so the shown chat's replies do not wait behind a busy chat's history over a slow link.
   // Review rounds 2-3: every buffered event applies first, so the chat's state is as it is now.
