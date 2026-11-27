@@ -364,3 +364,395 @@ test('O273: a set queued before the cap fires is not sent to the session the cap
   await until(said('mode:plan'), 'a clean adapter ran in the no-write mode');
   console.log('PASS O273 cap queued: the queued lock set was never sent to the stopping adapter; the next prompt ran in plan');
 });
+
+// O275: the agent lock is taken at one barrier. No prompt or steer goes while a setting is unanswered (a set added while
+// it waits included), nor while the lock is on and the agent has not confirmed its no-write mode; a message a stop or a
+// failed lock caught after its 202 is handed back, not lost. hang-mode holds a mode set; order.log lists sets, prompts and
+// steers in the order the agent saw them.
+const order = (dir) => lines(path.join(dir, 'order.log'));
+const sent = (verb, text) => (l) => l.startsWith(verb + ' ') && l.includes(text);
+const prompted = async (dir) => (await order(dir)).filter((l) => l.startsWith('prompt '));
+const unheldOf = (seen, turn) => seen.filter((e) => e.type === 'unheld' && e.data?.id === turn);
+
+test('O275 T1: a lock pressed during the start snapshot is answered before the prompt goes', async (t) => {
+  const { chat, dir, id, until } = await setup(t, 'o275-t1', true, { P9_SHELL_START_MS: '1500' });
+  await writeFile(path.join(dir, 'order.log'), '');
+  const r = await chat.prompt(id, { text: 'mode' });
+  assert.equal(r.status, 202, JSON.stringify(r));
+  await writeFile(path.join(dir, 'hang-mode'), 'plan');
+  const lock = chat.setLock({ on: true }); // during the snapshot; its set hangs
+  await pause(2500); // past the snapshot
+  assert.deepEqual(await prompted(dir), [], 'the prompt went before the agent answered the lock');
+  await unlink(path.join(dir, 'hang-mode'));
+  await until(said('mode:plan'), 'the prompt ran in the no-write mode');
+  assert.equal((await lock).on, true);
+  const log = await order(dir);
+  assert.ok(log.indexOf('set mode=plan') >= 0 && log.indexOf('set mode=plan') < log.findIndex((l) => l.startsWith('prompt ')), JSON.stringify(log));
+  console.log('PASS O275 T1: the prompt waited for the lock\'s answer and ran in plan');
+});
+
+test('O275 T1b: lock toggles added while the barrier waits are waited for too', async (t) => {
+  const { chat, dir, id, until } = await setup(t, 'o275-t1b', true, { P9_SHELL_START_MS: '1500' });
+  await writeFile(path.join(dir, 'order.log'), '');
+  const r = await chat.prompt(id, { text: 'mode' });
+  assert.equal(r.status, 202, JSON.stringify(r));
+  await writeFile(path.join(dir, 'hang-mode'), 'plan');
+  const toggles = [chat.setLock({ on: true })]; // during the snapshot; its set hangs
+  await pause(2200); // past the snapshot: the barrier waits on that set
+  await writeFile(path.join(dir, 'slow-config'), '600'); // each set then takes 600 ms
+  // Added while the barrier waits, so one that read the chain once would wake after the first and go.
+  toggles.push(chat.setLock({ on: false }));
+  await pause(100); toggles.push(chat.setLock({ on: true }));
+  await pause(200);
+  await unlink(path.join(dir, 'hang-mode'));
+  await until(said('mode:plan'), 'the prompt ran in the no-write mode');
+  await Promise.all(toggles);
+  const log = await order(dir), sets = log.flatMap((l, i) => (l.startsWith('set mode=') ? [i] : []));
+  assert.equal(sets.length, 3, JSON.stringify(log));
+  assert.ok(sets.at(-1) < log.findIndex((l) => l.startsWith('prompt ')), 'the prompt went before the last toggle was answered: ' + JSON.stringify(log));
+  console.log('PASS O275 T1b: the prompt went after all three toggles were answered, two of them added while it waited');
+});
+
+// Behaviour change: a steer no longer waits for a setting (a Stop could miss it while it waited). Refused at once, the
+// message is held and goes as the turn's next prompt, which meets the barrier.
+test('O275 T2: a message during an unanswered lock is not steered; it goes as the next prompt, after the lock', async (t) => {
+  const { chat, dir, id, until } = await setup(t, 'o275-t2');
+  await writeFile(path.join(dir, 'order.log'), '');
+  assert.equal((await chat.prompt(id, { text: 'gate' })).status, 202);
+  await until(said('gating'), 'the turn is running');
+  await writeFile(path.join(dir, 'hang-mode'), 'plan');
+  const lock = chat.setLock({ on: true });
+  await pause(200);
+  const s = await chat.prompt(id, { text: 'nudge' }); // answered at once: nothing waits
+  assert.equal(s.status, 202, JSON.stringify(s));
+  assert.ok(s.held, 'held for the turn\'s end: ' + JSON.stringify(s));
+  await unlink(path.join(dir, 'hang-mode'));
+  await lock;
+  await writeFile(path.join(dir, 'go'), '');
+  await until(echoed('nudge'), 'the held message went as the next prompt');
+  const log = await order(dir);
+  assert.ok(!log.some((l) => l.startsWith('steer ')), 'steered: ' + JSON.stringify(log));
+  assert.ok(log.indexOf('set mode=plan') >= 0 && log.indexOf('set mode=plan') < log.findIndex(sent('prompt', 'nudge')), JSON.stringify(log));
+  console.log('PASS O275 T2: no steer; the message went as the next prompt, after the lock was answered');
+});
+
+test('O275 T2b: a lock never answered sends no steer; the sender gets the message back once', { timeout: 60000 }, async (t) => {
+  const { chat, dir, id, seen, until } = await setup(t, 'o275-t2b');
+  await writeFile(path.join(dir, 'order.log'), '');
+  assert.equal((await chat.prompt(id, { text: 'gate' })).status, 202);
+  await until(said('gating'), 'the turn is running');
+  await writeFile(path.join(dir, 'hang-mode'), 'plan');
+  const lock = chat.setLock({ on: true });
+  await pause(200);
+  const s = await chat.prompt(id, { text: 'nudge' });
+  assert.ok(s.held, JSON.stringify(s));
+  await lock;
+  await until((e) => e.type === 'stopped', 'the unanswered lock stopped the chat');
+  await until((e) => e.type === 'unheld' && e.data?.text === 'nudge', 'the text came back');
+  await unlink(path.join(dir, 'hang-mode'));
+  await pause(1000);
+  await until(() => true, 'read the events since');
+  assert.ok(!(await order(dir)).some((l) => l.startsWith('steer ') || sent('prompt', 'nudge')(l)), 'sent to an agent that never answered the lock');
+  const back = seen.filter((e) => e.type === 'unheld' && e.data?.text === 'nudge');
+  assert.equal(back.length, 1, JSON.stringify(back));
+  assert.equal(back[0].data.id, s.held, 'the held row it came back to');
+  console.log('PASS O275 T2b: no steer; the text came back once (' + back[0].data.why + ')');
+});
+
+test('O275 T3: a lock refused during the start snapshot hands back the current and the held message once each', async (t) => {
+  const { chat, dir, id, seen, until } = await setup(t, 'o275-t3', true, { P9_SHELL_START_MS: '1500' });
+  await writeFile(path.join(dir, 'calls.log'), '');
+  const r = await chat.prompt(id, { text: 'first' });
+  assert.equal(r.status, 202, JSON.stringify(r));
+  const h = await chat.prompt(id, { text: 'second', when: 'queue' });
+  assert.ok(h.held, JSON.stringify(h));
+  await writeFile(path.join(dir, 'fail-mode'), 'plan');
+  await chat.setLock({ on: true });
+  await until((e) => e.type === 'stopped', 'the refused lock stopped the chat');
+  await until((e) => e.type === 'unheld' && e.data?.id === r.turn, 'the current message handed back');
+  await pause(1500);
+  await until(() => true, 'read the events since');
+  assert.equal(unheldOf(seen, r.turn).length, 1, JSON.stringify(unheldOf(seen, r.turn)));
+  assert.equal(unheldOf(seen, r.turn)[0].data.text, 'first');
+  assert.equal(seen.filter((e) => e.type === 'unheld' && e.data?.text === 'second').length, 1, 'the held one once');
+  assert.deepEqual((await lines(path.join(dir, 'calls.log'))).filter((l) => l.endsWith(' prompt')), []);
+  console.log('PASS O275 T3: both messages handed back once each; no prompt');
+});
+
+test('O275 T3b: a lock the agent answers without naming the mode hands the message back', async (t) => {
+  const { chat, dir, id, seen, until } = await setup(t, 'o275-t3b', true, { P9_SHELL_START_MS: '1500' });
+  await writeFile(path.join(dir, 'calls.log'), '');
+  const r = await chat.prompt(id, { text: 'first' });
+  assert.equal(r.status, 202, JSON.stringify(r));
+  await writeFile(path.join(dir, 'quiet-config'), '');
+  await chat.setLock({ on: true });
+  await until((e) => e.type === 'unheld' && e.data?.id === r.turn, 'handed back');
+  await pause(1500);
+  await until(() => true, 'read the events since');
+  assert.equal(unheldOf(seen, r.turn).length, 1);
+  assert.deepEqual((await lines(path.join(dir, 'calls.log'))).filter((l) => l.endsWith(' prompt')), []);
+  console.log('PASS O275 T3b: the unconfirmed lock handed the message back; no prompt');
+});
+
+test('O275 T3c: a lock refused after the snapshot ended, while the barrier waits, sends nothing and hands back', async (t) => {
+  const { chat, dir, id, seen, until } = await setup(t, 'o275-t3c', true, { P9_SHELL_START_MS: '1500' });
+  await writeFile(path.join(dir, 'calls.log'), '');
+  const r = await chat.prompt(id, { text: 'first' });
+  assert.equal(r.status, 202, JSON.stringify(r));
+  await writeFile(path.join(dir, 'fail-mode'), 'plan');
+  await writeFile(path.join(dir, 'hang-mode'), 'plan');
+  const lock = chat.setLock({ on: true });
+  await pause(2500); // past the snapshot
+  await unlink(path.join(dir, 'hang-mode')); // the set is refused now
+  await lock;
+  await until((e) => e.type === 'unheld' && e.data?.id === r.turn, 'handed back');
+  await pause(1000);
+  await until(() => true, 'read the events since');
+  assert.equal(unheldOf(seen, r.turn).length, 1);
+  assert.deepEqual((await lines(path.join(dir, 'calls.log'))).filter((l) => l.endsWith(' prompt')), []);
+  console.log('PASS O275 T3c: the late refusal sent nothing and handed the message back');
+});
+
+test('O275 T3d: a lock never answered through a long snapshot hands the message back', { timeout: 60000 }, async (t) => {
+  const { chat, dir, id, seen, until } = await setup(t, 'o275-t3d', true, { P9_SHELL_START_MS: '6000' });
+  await writeFile(path.join(dir, 'calls.log'), '');
+  const r = await chat.prompt(id, { text: 'first' });
+  assert.equal(r.status, 202, JSON.stringify(r));
+  await writeFile(path.join(dir, 'hang-mode'), 'plan');
+  await chat.setLock({ on: true }); // gives up at 5 s and stops the chat, before the snapshot ends
+  await until((e) => e.type === 'unheld' && e.data?.id === r.turn, 'handed back');
+  await unlink(path.join(dir, 'hang-mode'));
+  await pause(1000);
+  await until(() => true, 'read the events since');
+  assert.equal(unheldOf(seen, r.turn).length, 1);
+  assert.deepEqual((await lines(path.join(dir, 'calls.log'))).filter((l) => l.endsWith(' prompt')), []);
+  console.log('PASS O275 T3d: the stopped chat handed the message back; no prompt');
+});
+
+// Behaviour change, not a fix: an unlock still unanswered 5 s after the snapshot now holds the prompt (main sent it in
+// the no-write mode); the message comes back with a line saying why.
+test('O275 T4: an unlock not answered within the barrier\'s wait hands the message back', { timeout: 60000 }, async (t) => {
+  const { chat, dir, id, seen, until } = await setup(t, 'o275-t4', true, { P9_SHELL_START_MS: '1500' });
+  assert.equal((await chat.setLock({ on: true })).on, true);
+  await writeFile(path.join(dir, 'calls.log'), '');
+  const r = await chat.prompt(id, { text: 'first' });
+  assert.equal(r.status, 202, JSON.stringify(r));
+  await writeFile(path.join(dir, 'hang-mode'), 'default');
+  const unlock = chat.setLock({ on: false });
+  await until((e) => e.type === 'error' && /has not answered/.test(e.data?.message), 'the line saying why');
+  assert.equal(unheldOf(seen, r.turn).length, 1);
+  assert.deepEqual((await lines(path.join(dir, 'calls.log'))).filter((l) => l.endsWith(' prompt')), []);
+  await unlink(path.join(dir, 'hang-mode'));
+  await unlock;
+  console.log('PASS O275 T4: the unanswered unlock held the prompt; the message came back with its line');
+});
+
+// The setting stays hung through the Stop: the Stop's end does not wait for it (the barrier's wait is cut short when the
+// lock's own 5 s give-up stops the chat), and the Stop button's start is cancelled, not handed back (MC-15, as on main).
+test('O275: Stop wins admission: a Stop while the barrier waits on a hung set ends the turn cancelled, nothing sent', { timeout: 60000 }, async (t) => {
+  const { chat, dir, id, seen, until } = await setup(t, 'o275-stop-wins', true, { P9_SHELL_START_MS: '1500' });
+  await writeFile(path.join(dir, 'calls.log'), '');
+  const r = await chat.prompt(id, { text: 'first' });
+  assert.equal(r.status, 202, JSON.stringify(r));
+  await writeFile(path.join(dir, 'hang-mode'), 'plan');
+  const lock = chat.setLock({ on: true });
+  await pause(2000); // past the snapshot: the barrier waits
+  assert.equal((await chat.cancel(id)).status, 200);
+  await until((e) => e.type === 'turn-end' && e.data?.stopReason === 'cancelled', 'the turn ended cancelled, the set still hung');
+  await pause(500);
+  await until(() => true, 'read the events since');
+  assert.equal(seen.filter((e) => e.type === 'turn-end').length, 2, 'the warm-up\'s end and this one, once');
+  assert.equal(unheldOf(seen, r.turn).length, 0, 'a Stop is not a hand-back');
+  assert.deepEqual((await lines(path.join(dir, 'calls.log'))).filter((l) => l.endsWith(' prompt')), []);
+  await unlink(path.join(dir, 'hang-mode'));
+  await lock;
+  console.log('PASS O275 Stop wins admission: cancelled with the set hung, not handed back, nothing sent');
+});
+
+test('O275: a chat stopped while the barrier waits on a hung set hands the message back once, nothing sent', async (t) => {
+  const { chat, dir, id, seen, until } = await setup(t, 'o275-stop-close', true, { P9_SHELL_START_MS: '1500' });
+  await writeFile(path.join(dir, 'calls.log'), '');
+  const r = await chat.prompt(id, { text: 'first' });
+  assert.equal(r.status, 202, JSON.stringify(r));
+  await writeFile(path.join(dir, 'hang-mode'), 'plan');
+  const lock = chat.setLock({ on: true });
+  await pause(2000); // past the snapshot: the barrier waits
+  assert.equal((await chat.stop(id)).status, 200);
+  await until((e) => e.type === 'unheld' && e.data?.id === r.turn, 'handed back, the set still hung');
+  await pause(500);
+  await until(() => true, 'read the events since');
+  assert.equal(unheldOf(seen, r.turn).length, 1, JSON.stringify(unheldOf(seen, r.turn)));
+  assert.equal(unheldOf(seen, r.turn)[0].data.text, 'first');
+  assert.deepEqual((await lines(path.join(dir, 'calls.log'))).filter((l) => l.endsWith(' prompt')), []);
+  await unlink(path.join(dir, 'hang-mode'));
+  await lock;
+  console.log('PASS O275 stop while waiting: handed back once with its text, nothing sent');
+});
+
+// A guard, green on main too: once the prompt went, a stop is not a "never sent".
+test('O275: invocation wins Stop: a stop after the prompt went hands nothing back and sends nothing again', async (t) => {
+  const { chat, dir, id, seen, until } = await setup(t, 'o275-invoked');
+  await writeFile(path.join(dir, 'calls.log'), '');
+  const r = await chat.prompt(id, { text: 'gate' });
+  assert.equal(r.status, 202, JSON.stringify(r));
+  await until(said('gating'), 'the prompt reached the agent');
+  assert.equal((await chat.stop(id)).status, 200);
+  await until((e) => e.type === 'stopped', 'stopped');
+  await pause(500);
+  await until(() => true, 'read the events since');
+  assert.equal(unheldOf(seen, r.turn).length, 0, 'a sent prompt was handed back as never sent');
+  assert.equal((await lines(path.join(dir, 'calls.log'))).filter((l) => l.endsWith(' prompt')).length, 1);
+  console.log('PASS O275 invocation wins Stop: no hand-back, one prompt');
+});
+
+const toolAt = (status) => (e) => e.type === 'update' && e.data?.toolCallId === 'tool-1' && e.data?.status === status;
+
+test('O275 T5: a held steer refused while a set is unanswered, then Stop, starts no new turn', { timeout: 60000 }, async (t) => {
+  const { chat, dir, id, seen, until } = await setup(t, 'o275-t5');
+  await writeFile(path.join(dir, 'order.log'), '');
+  assert.equal((await chat.prompt(id, { text: 'tools 2' })).status, 202);
+  await until(toolAt('in_progress'), 'a tool is running');
+  const h = await chat.prompt(id, { text: 'nudge' });
+  assert.equal(h.when, 'steer', JSON.stringify(h)); // held for the tool's end
+  await writeFile(path.join(dir, 'hang-mode'), 'plan');
+  const lock = chat.setLock({ on: true });
+  await until(toolAt('completed'), 'the tool ended: the held steer is tried while the lock is unanswered');
+  await pause(200);
+  assert.equal((await chat.cancel(id)).status, 200);
+  await until((e) => e.type === 'turn-end' && e.data?.stopReason === 'cancelled', 'the turn ended cancelled');
+  await unlink(path.join(dir, 'hang-mode'));
+  await lock;
+  await pause(1500);
+  await until(() => true, 'read the events since');
+  const log = await order(dir);
+  assert.ok(!log.some((l) => sent('prompt', 'nudge')(l) || sent('steer', 'nudge')(l)), 'the held message went after the Stop: ' + JSON.stringify(log));
+  assert.equal(seen.filter((e) => e.type === 'unheld' && e.data?.text === 'nudge').length, 1, 'handed back once');
+  console.log('PASS O275 T5: no new turn after the Stop; the held message came back once');
+});
+
+test('O275 T6: a read-only prompt is not sent in a wider mode after a lock and unlock during its snapshot', { timeout: 60000 }, async (t) => {
+  const { chat, dir, id, seen, until } = await setup(t, 'o275-t6', true, { P9_SHELL_START_MS: '1500' });
+  await writeFile(path.join(dir, 'order.log'), '');
+  const r = await chat.prompt(id, { text: 'mode', mode: 'Plan' });
+  assert.equal(r.status, 202, JSON.stringify(r));
+  assert.equal((await chat.setLock({ on: true })).on, true); // another window, during the snapshot
+  await writeFile(path.join(dir, 'hang-mode'), 'default');
+  const unlock = chat.setLock({ on: false }); // its set is unanswered when the snapshot ends
+  await pause(2500);
+  await unlink(path.join(dir, 'hang-mode'));
+  await unlock;
+  await until((e, i, all) => (e.type === 'unheld' && e.data?.id === r.turn) || all.filter((x) => x.type === 'turn-end').length >= 2, 'handed back or ran');
+  await pause(500);
+  await until(() => true, 'read the events since');
+  const log = await order(dir);
+  assert.ok(!log.some((l) => l.startsWith('prompt ')), 'the read-only prompt went in a wider mode: ' + JSON.stringify(log));
+  assert.equal(unheldOf(seen, r.turn).length, 1, JSON.stringify(unheldOf(seen, r.turn)));
+  assert.equal(unheldOf(seen, r.turn)[0].data.text, 'mode');
+  console.log('PASS O275 T6: not sent after the unlock; handed back once');
+});
+
+test('O275 T7: a held steer out when Stop came is handed back, not sent as a new turn', { timeout: 60000 }, async (t) => {
+  const { chat, dir, id, seen, until } = await setup(t, 'o275-t7');
+  await writeFile(path.join(dir, 'order.log'), '');
+  assert.equal((await chat.prompt(id, { text: 'tools 2' })).status, 202);
+  await until(toolAt('in_progress'), 'a tool is running');
+  const h = await chat.prompt(id, { text: 'nudge' });
+  assert.equal(h.when, 'steer', JSON.stringify(h));
+  await writeFile(path.join(dir, 'steer-wait'), '1500'); // the agent answers the steer only after the turn ended
+  await until(toolAt('completed'), 'the tool ended: the held steer is out');
+  await pause(300);
+  assert.equal((await chat.cancel(id)).status, 200);
+  await until((e) => e.type === 'turn-end' && e.data?.stopReason === 'cancelled', 'the turn ended cancelled');
+  await pause(2500);
+  await until(() => true, 'read the events since');
+  const log = await order(dir);
+  assert.ok(log.some(sent('steer', 'nudge')), 'the steer was out: ' + JSON.stringify(log));
+  assert.ok(!log.some(sent('prompt', 'nudge')), 'the held message went as a new turn after the Stop: ' + JSON.stringify(log));
+  assert.equal(seen.filter((e) => e.type === 'unheld' && e.data?.text === 'nudge').length, 1, 'handed back once');
+  console.log('PASS O275 T7: the refused steer came back once; no turn after the Stop');
+});
+
+const ends = (n) => (e, i, all) => all.filter((x) => x.type === 'turn-end').length >= n;
+
+// Round 3: an agent can keep the permissions a turn started with (Codex does), so a confirmed lock is not enough to steer.
+test('O275 T8: a steer after the lock is confirmed is not sent into a turn begun unlocked; it runs at that turn\'s end', async (t) => {
+  const { chat, dir, id, until } = await setup(t, 'o275-t8');
+  await writeFile(path.join(dir, 'order.log'), '');
+  assert.equal((await chat.prompt(id, { text: 'gate' })).status, 202);
+  await until(said('gating'), 'the turn is running, begun unlocked');
+  assert.equal((await chat.setLock({ on: true })).on, true); // confirmed while the turn runs
+  const s = await chat.prompt(id, { text: 'nudge' });
+  assert.equal(s.status, 202, JSON.stringify(s));
+  await writeFile(path.join(dir, 'go'), '');
+  await until(echoed('nudge'), 'the message ran as the next prompt');
+  const log = await order(dir);
+  assert.ok(!log.some(sent('steer', 'nudge')), 'steered into the turn begun unlocked: ' + JSON.stringify(log));
+  assert.ok(log.lastIndexOf('set mode=plan') >= 0 && log.lastIndexOf('set mode=plan') < log.findIndex(sent('prompt', 'nudge')), JSON.stringify(log));
+  console.log('PASS O275 T8: no steer under the lock; the message ran as the next prompt, in the no-write mode');
+});
+
+test('O275 T9: a held steer refused after its turn was stopped and a new one began is handed back, not run at that turn\'s end', { timeout: 60000 }, async (t) => {
+  const { chat, dir, id, seen, until } = await setup(t, 'o275-t9');
+  await writeFile(path.join(dir, 'order.log'), '');
+  assert.equal((await chat.prompt(id, { text: 'tools 2' })).status, 202);
+  await until(toolAt('in_progress'), 'a tool is running');
+  const h = await chat.prompt(id, { text: 'nudge' });
+  assert.equal(h.when, 'steer', JSON.stringify(h));
+  await writeFile(path.join(dir, 'steer-wait'), '2500'); // the agent refuses the steer only after turn B began
+  await writeFile(path.join(dir, 'steering-refuses'), '');
+  await until(toolAt('completed'), 'the tool ended: the held steer is out');
+  await pause(200);
+  assert.equal((await chat.cancel(id)).status, 200);
+  await until((e) => e.type === 'turn-end' && e.data?.stopReason === 'cancelled', 'turn A ended cancelled');
+  assert.equal((await chat.prompt(id, { text: 'gate' })).status, 202); // turn B, before A's steer is refused
+  await until(said('gating'), 'turn B is running');
+  await pause(2500); // the refusal came back during B
+  await writeFile(path.join(dir, 'go'), '');
+  await until(ends(3), 'turn B ended');
+  await pause(1500);
+  await until(() => true, 'read the events since');
+  const log = await order(dir);
+  assert.ok(log.some(sent('steer', 'nudge')), 'the steer was out: ' + JSON.stringify(log));
+  assert.ok(!log.some(sent('prompt', 'nudge')), 'the stopped turn\'s message ran at turn B\'s end: ' + JSON.stringify(log));
+  assert.equal(seen.filter((e) => e.type === 'unheld' && e.data?.text === 'nudge').length, 1, 'handed back once');
+  console.log('PASS O275 T9: handed back once; nothing ran at turn B\'s end');
+});
+
+test('O275 T10: a batch of two senders stopped before it went hands each message back to its own sender', async (t) => {
+  const { chat, dir, id, seen, until } = await setup(t, 'o275-t10', true, { P9_SHELL_START_MS: '1500' });
+  const other = (await chat.create({ provider: 'claude' })).conversation;
+  await writeFile(path.join(dir, 'calls.log'), '');
+  assert.equal((await chat.prompt(id, { text: 'gate' })).status, 202);
+  await until(said('gating'), 'the turn is running');
+  const mine = await chat.prompt(id, { text: 'mine', when: 'queue' });
+  const theirs = await chat.prompt(id, { text: 'theirs', when: 'queue' }, undefined, other);
+  assert.ok(mine.held && theirs.held, JSON.stringify([mine, theirs]));
+  await writeFile(path.join(dir, 'go'), '');
+  await until(ends(2), 'the turn ended: the two go as one prompt, in its start snapshot');
+  await pause(300);
+  assert.equal((await chat.stop(id)).status, 200);
+  await until((e) => e.type === 'unheld', 'handed back');
+  await pause(500);
+  await until(() => true, 'read the events since');
+  const back = seen.filter((e) => e.type === 'unheld');
+  assert.deepEqual(back.filter((e) => !e.data.from).map((e) => e.data.text), ['mine'], 'the owner\'s box gets only the owner\'s text: ' + JSON.stringify(back.map((e) => e.data)));
+  assert.deepEqual(back.filter((e) => e.data.from).map((e) => [e.data.text, e.data.from]), [['theirs', other]]);
+  assert.equal((await lines(path.join(dir, 'calls.log'))).filter((l) => l.endsWith(' prompt')).length, 1, 'the batch was sent');
+  console.log('PASS O275 T10: each message went back to its own sender, nothing sent');
+});
+
+test('O275 T11: in a locked chat, a message sent while the turn waits on a question declines it and runs as the next prompt', async (t) => {
+  const { chat, dir, id, seen, until } = await setup(t, 'o275-t11');
+  await writeFile(path.join(dir, 'order.log'), '');
+  assert.equal((await chat.setLock({ on: true })).on, true);
+  assert.equal((await chat.prompt(id, { text: 'ask' })).status, 202);
+  await until((e) => e.type === 'question' || e.type === 'request' || e.type === 'elicitation', 'the turn waits on a question');
+  const s = await chat.prompt(id, { text: 'nudge' });
+  assert.equal(s.status, 202, JSON.stringify(s));
+  await until((e) => e.type === 'answered' && e.data?.answer?.action === 'cancel', 'the question was declined');
+  await until(echoed('nudge'), 'the message ran as the next prompt');
+  const log = await order(dir);
+  assert.ok(!log.some(sent('steer', 'nudge')), 'steered under the lock: ' + JSON.stringify(log));
+  assert.ok(seen.some(said('ask:' + JSON.stringify({ action: 'cancel' }))), 'the question ended declined');
+  console.log('PASS O275 T11: the question was declined and the message ran after it, not steered');
+});
