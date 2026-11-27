@@ -827,6 +827,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
   // O252's test widens the turn start snapshot's window (test homes only).
   const NOTE_MS = process.env.P9_TEST_HOME && Number(process.env.P9_NOTE_MS) > 0 ? Number(process.env.P9_NOTE_MS) : 0; // tests: widen the note read
   const SHELL_START_MS = process.env.P9_TEST_HOME && Number(process.env.P9_SHELL_START_MS) > 0 ? Number(process.env.P9_SHELL_START_MS) : 0;
+  const LOCK_FAILED = 'Agent lock is on and the agent did not confirm its no-write mode, so P9 stopped it; nothing was sent.';
   const SET_CAP_MS = process.env.P9_TEST_HOME && Number(process.env.P9_SET_CAP_MS) > 0 ? Number(process.env.P9_SET_CAP_MS) : 30000; // setOption
   const UNPROMPTED_MARK_MS = process.env.P9_TEST_HOME && Number(process.env.P9_UNPROMPTED_MARK_MS) > 0 ? Number(process.env.P9_UNPROMPTED_MARK_MS) : 300000;
   const quiet = (session, id) => {
@@ -988,8 +989,10 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
   const modeFor = (provider) => locked ? NARROW[provider] : START[provider];
   // #540 reviews 14 and 15: the Agent lock's one mode change per session (setLock keeps it as session.narrowing). A prompt or
   // steer about to go waits for it, then confirms the no-write mode really is the session's (the reply's currentValue).
-  // false: under the lock and not in the no-write mode, so nothing may go.
-  const narrowed = async (session, provider) => { await session.narrowing; return !(locked && NARROW[provider] && session.mode !== NARROW[provider]); };
+  // lockSettled: the newest change (one made while waiting is waited for too) did not fail. narrowed, also: under the lock
+  // the session is in the no-write mode. false: nothing may go.
+  const lockSettled = async (session) => { let ok; for (let seen; seen !== session.narrowing;) ok = await (seen = session.narrowing); return ok !== false; };
+  const narrowed = async (session, provider) => (await lockSettled(session)) && !(locked && NARROW[provider] && session.mode !== NARROW[provider]);
   // One set at a time per session (mode, model, effort), sent in the order asked: a set that answers late can never land
   // after a later one. setWaits counts the sets not settled yet; while there is one, a prompt sets its own mode, model and
   // settings instead of trusting what P9 last heard (#540 review 12: a set that timed out may still land). then: what the
@@ -1004,13 +1007,21 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     session.setWaits = (session.setWaits ?? 0) + 1;
     const set = (session.setChain ?? Promise.resolve()).then(send);
     // #540 reviews 15 and 16: a set the adapter never answers would hold the chain, and every later prompt is refused ("An
-    // earlier setting has not answered"). Past SET_CAP_MS the session is retired instead: its adapter is stopped, so that
-    // set can never land on a later turn, and the chat's next prompt starts a clean one. The chat says why.
+    // earlier setting has not answered"). Past SET_CAP_MS a mode set under the Agent lock retires the session: its adapter
+    // is stopped, so a late writable answer can never land on a later turn, and the chat's next prompt starts a clean one.
+    // The chat says why. Any other set (an unlock, a model) only frees the chain: the turn runs on, still in the mode it
+    // had (narrow, for an unlock), and session.late counts it until it answers, so a lock turned on meanwhile is not
+    // confirmed over it (setLock).
+    // ponytail: a late model or effort answer can still land on a later turn; only the mode is guarded.
     let cap;
     const capped = new Promise((resolve) => { cap = setTimeout(resolve, SET_CAP_MS, 'cap'); });
     session.setChain = Promise.race([set.catch(() => {}), capped]).then((how) => {
       clearTimeout(cap);
       if (how !== 'cap' || live.get(session.id) !== session || session.stopping) return;
+      if (!(configId === 'mode' && locked)) {
+        if (configId === 'mode') { session.late = (session.late ?? 0) + 1; set.catch(() => {}).finally(() => { session.late -= 1; }); }
+        return;
+      }
       emit(session.id, 'error', { message: 'The agent did not answer a setting for ' + Math.round(SET_CAP_MS / 1000) + ' s, so P9 stopped it. Your next message starts it again.' });
       stopConversation(session.id);
     }).finally(() => { session.setWaits -= 1; });
@@ -1694,7 +1705,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     stop: (id) => stopConversation(id), recovered, remove: (id) => {
       const { usage, unused } = ledger.remove(id);
       db.prepare('DELETE FROM prefs WHERE key IN (?, ?, ?, ?, ?, ?, ?, ?, ?)').run('profile:' + id, 'rules:' + id, 'slot:' + id, 'askable:' + id, 'sprint:' + id, 'start:' + id, 'parked:' + id, 'taken:' + id, 'cut-by:' + id); // O48, A7, daemon-5, O214, O231
-      gauges.delete(id); parked.delete(id);
+      gauges.delete(id); parked.delete(id); claims.delete(id);
       if (attachDir && ID.test(id) && rootOk()) rmSync(path.join(attachDir, id), { recursive: true, force: true }); // A2 step 1: this chat's folder only
       if (imageDir) for (const hash of unused) if (/^[0-9a-f]{64}$/.test(hash)) for (const ext of new Set(Object.values(EXT))) rmSync(path.join(imageDir, hash + ext), { force: true });
       return usage;
@@ -1769,10 +1780,19 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
         if (session.solo && !locked) { session.back = modeFor(row(id).provider); return; }
         if (!session.solo) session.back = undefined;
         // Kept on the session (narrowed): a prompt or steer waits for this change, its check and its Stop, never a set of its own.
-        const provider = row(id).provider;
+        // Review round 2: each change has its own token (session.narrowTick); only the session's newest acts on its result,
+        // so an unlock that answers after a newer lock went on does not stop the chat. The lock needs the adapter to say it
+        // is in the no-write mode (a reply with no mode is not that) and no earlier mode set still on its way (session.late).
+        const provider = row(id).provider, on = locked, narrow = NARROW[provider], tick = session.narrowTick = (session.narrowTick ?? 0) + 1;
         await (session.narrowing = (async () => {
-          try { await setMode(session, provider, undefined, true, 5000); if (locked && NARROW[provider] && session.mode !== NARROW[provider]) throw new Error('not-narrow'); }
-          catch { if (locked) await stopConversation(id); }
+          try {
+            const reply = await setMode(session, provider, undefined, true, 5000);
+            if (on && narrow && (reply?.configOptions?.find((o) => o.id === 'mode')?.currentValue !== narrow || session.late)) throw new Error('not-narrow');
+            return true;
+          } catch {
+            if (!on || session.narrowTick !== tick) return true; // a newer change owns the session: its result counts
+            await stopConversation(id); return false;
+          }
         })());
       }));
       return { status: 200, on: locked };
@@ -1964,8 +1984,9 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       // #542 round 4: so does one that ended cleanup-failed meanwhile (out of stops already): anything but this prompt's own
       // 'turn' means its claim is gone, and connect() would start a second adapter beside one that may still live. Its own:
       // a newer prompt that claimed the chat after a Stop meanwhile has its own token.
-      const now = row(id)?.state;
-      if (stops.has(id) || now !== 'turn' || claims.get(id) !== claim) { release(); return refused(409, now === 'cleanup-failed' || now === 'moving' || now === 'moved' ? now : 'stopping'); }
+      const now = row(id)?.state, mine = claims.get(id) === claim;
+      if (mine) claims.delete(id); // checked once; a newer start's token is its own
+      if (stops.has(id) || now !== 'turn' || !mine) { release(); return refused(409, now === 'cleanup-failed' || now === 'moving' || now === 'moved' ? now : 'stopping'); }
       const lastNote = project && db.prepare("SELECT data ->> '$.projectNote' AS hash FROM events WHERE conversation = ? AND type = 'user' AND json_valid(data) AND data ->> '$.steered' IS NULL ORDER BY cursor DESC LIMIT 1").get(id)?.hash;
       const projectText = project?.text && project.hash !== lastNote ? project.text : null;
       const rules = bare ? null : rulesFor(conversation, body);
@@ -2006,6 +2027,10 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
         // A question to the user that the agent raised on its own stays open: another chat's question does not decline it.
         if (solo && session.pending.size) return refused(409, 'waiting-on-user');
         if (solo) session.back ??= session.mode;
+        // Review round 2 finding 2: a lock change on its way for this session is waited for before the answer (and before
+        // this prompt's own mode set, which would go behind it), so one that fails is a plain refusal: the box keeps the
+        // message and its files, and nothing needs handing back.
+        if (!(await lockSettled(session))) { emit(id, 'error', { message: LOCK_FAILED, ends: true }); return refused(409, 'lock-unconfirmed'); }
         const want = locked || solo ? NARROW[conversation.provider] : (body.mode && MODES[conversation.provider][body.mode]) || session.back;
         if (want && (want !== session.mode || session.setWaits)) {
           // A solo's set is quiet: the window's pill and a later resume keep the chat's own mode.
@@ -2093,16 +2118,21 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       // below, quiet once stopping), nor does a device revoked meanwhile. Under an Agent lock whose no-write mode is not
       // confirmed nothing goes either, and the message is handed back (unheld, as a stopped start's held one), not lost
       // after its 202.
+      // Review round 2 findings 2 and 3: after the 202 the box is empty, so the message is handed back (its text into the
+      // box, as a stopped start's held one) and the chat says so once (told: the failure path below says nothing more).
+      // ponytail: the 202 cleared its files from the box too and only the text comes back, so the line asks for them again.
+      const handBack = (message) => {
+        emit(id, 'unheld', { id: turn, text: body.text, why: 'stopped', ...(senders.has(body) && { from: senders.get(body) }) });
+        emit(id, 'error', { message: message + (images?.length ? ' Attach its files again.' : ''), ends: true });
+        throw Object.assign(new Error(message), { told: true });
+      };
       const dispatch = async () => {
         const narrowOk = await ready;
         if (session.cut === turn) return { stopReason: 'cancelled' };
         // First: a lock change that failed stops the chat (setLock), and this message still comes back.
-        if (!narrowOk) {
-          emit(id, 'unheld', { id: turn, text: body.text, why: 'stopped', ...(senders.has(body) && { from: senders.get(body) }) });
-          throw new Error('Agent lock is on and the agent did not confirm its no-write mode; nothing was sent.');
-        }
+        if (!narrowOk) handBack(LOCK_FAILED);
         if (gone()) throw new Error('stopping');
-        try { stillAuthorized(); } catch { throw new Error('This device was signed out; nothing was sent.'); }
+        try { stillAuthorized(); } catch { handBack('This device was signed out; nothing was sent.'); }
         session.heard?.forEach((m) => { m.copied = true; });
         return session.agent.prompt({ sessionId: session.sessionId, prompt });
       };
@@ -2120,7 +2150,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
           untake(id, turn); // O214: a failed turn is not a message that arrived
           if (cutLine && !keptPref('cut-by:' + id)) cutBy(id, cutLine); // not read: the next prompt says it
           if (session.turn === turn) for (const hook of turnFailedHooks) { try { hook(id, turn, Boolean(solo)); } catch {} }
-          if (rules?.started) startLost(id); for (const n of told) if (!resent.has(n)) { resent.add(n); park(id, n, true); } if (session.turn === turn && !session.stopping) emit(id, 'error', { message: profileError(error, session), ends: true }); },
+          if (rules?.started) startLost(id); for (const n of told) if (!resent.has(n)) { resent.add(n); park(id, n, true); } if (session.turn === turn && !session.stopping && !error?.told) emit(id, 'error', { message: profileError(error, session), ends: true }); },
       ).finally(() => {
         if (session.turn !== turn) return;
         session.turn = null; session.turnEdits = null;

@@ -522,7 +522,9 @@ function foldBlocks(now: Folded, events: Json[]) {
     else if (kind === 'steer-lost') add('note', 'This message may not have reached the agent · ' + data.text);
     // #540 review 16, as the window: a held message handed back that does not go into the box (another chat's or P9's, or
     // refused) is told as not sent. The user's own taken back, cancelled or stopped goes into the box instead (fetchEvents).
-    else if (kind === 'unheld' && data.why !== 'noted' && (data.from || !['removed', 'cancelled', 'stopped'].includes(String(data.why)))) add('note', 'Not sent (' + data.why + '): ' + data.text);
+    // Review round 2 finding 5: only one that really was not sent. Noted, resumed (it goes next) and replaced (its newer
+    // text goes) are not failures, nor removed (the user's own x).
+    else if (kind === 'unheld' && !['noted', 'resumed', 'replaced', 'removed'].includes(String(data.why)) && (data.from || !['cancelled', 'stopped'].includes(String(data.why)))) add('note', 'Not sent (' + data.why + '): ' + data.text);
     else if (kind === 'interrupted') { settle(); add('note', 'Stopped · The P9 daemon restarted mid-turn. Send again to resume.'); }
     else if (kind === 'exited' || kind === 'stopped') { settle(); add('note', 'Stopped · Send again to resume.'); }
   }

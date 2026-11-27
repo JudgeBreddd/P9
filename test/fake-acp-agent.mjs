@@ -220,7 +220,8 @@ const connection = acp.connectAgent(stream, {
     if (existsSync('sets.log')) appendFileSync('sets.log', cwd.split(':')[0] + ' ' + params.configId + '=' + params.value + '\n'); // O39: every setting P9 sets, and whether the session was new or resumed
     if (params.configId === 'model') { if (!(listedModels()?.map((m) => m.value) ?? ['default', 'opus', 'haiku']).includes(params.value)) throw new Error('unknown model'); model = params.value; }
     else if (Object.hasOwn(picked, params.configId)) { picked[params.configId] = String(params.value); } else mode = String(params.value);
-    return { configOptions: configOptions() };
+    // O267b round 3: no-mode-reply answers a setting without saying the mode (an adapter that acknowledges only).
+    return { configOptions: existsSync('no-mode-reply') ? configOptions().filter((o) => o.id !== 'mode') : configOptions() };
   },
   async cancel(params) { cancelled.add(params.sessionId); },
   async prompt(params) {

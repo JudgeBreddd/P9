@@ -558,6 +558,8 @@ test('P18: a handed-back message another chat sent does not go into the box', { 
   const { DatabaseSync } = await import('node:sqlite');
   const db = new DatabaseSync(path.join(server.directory, '.local/state/p9-foundation/p9.db'), { timeout: 5000 });
   const add = (data) => db.prepare('INSERT INTO events (conversation, type, data, at) VALUES (?, ?, ?, ?)').run(id, 'unheld', JSON.stringify(data), Date.now());
+  add({ id: 'q-res', text: 'goes next', why: 'resumed' });
+  add({ id: 'q-rep', text: 'older words', why: 'replaced', from: 'p9' });
   add({ id: 'q-other', text: 'from another chat', why: 'stopped', from: 'p9' });
   add({ id: 'q-mine', text: 'mine', why: 'cancelled' });
   db.close();
@@ -565,6 +567,27 @@ test('P18: a handed-back message another chat sent does not go into the box', { 
   assert.equal(await page.inputValue('#prompt'), 'mine', 'the other chat\'s message stayed out of the box');
   // Review round 1 finding 8: told as not sent in the chat, as the window tells it.
   await page.waitForFunction(() => document.querySelector('#events').textContent.includes('Not sent (stopped): from another chat'), null, { timeout: 15000 });
+  // Review round 2 finding 5: one that resumed or was replaced is not a failure: no "Not sent" line (written before the last).
+  assert.ok(!(await page.textContent('#events')).includes('Not sent (resumed)') && !(await page.textContent('#events')).includes('Not sent (replaced)'));
+});
+// Review round 2 finding 2 (O267b): a send that comes while the Agent lock's change is on its way waits for it; when the
+// agent never confirms the no-write mode it is refused before any 202, so the box keeps its text and its file.
+test('P18: a send refused because the Agent lock did not take keeps its text and file in the box', { timeout: 90000 }, async (t) => {
+  const { page, server } = await phoneOn(t);
+  const id = await newChat(page, 'claude');
+  await send(page, 'short');
+  for (const end = Date.now() + 15000; (await server.desk('/chat')).body.conversations.find((c) => c.id === id)?.state !== 'running';) { assert.ok(Date.now() < end, 'the first turn ended'); await new Promise((done) => setTimeout(done, 200)); }
+  await writeFile(path.join(server.workspace, 'slow-config'), '8000'); // past the lock's 5 s wait
+  const lock = server.desk('/agent-lock', 'POST', { on: true });
+  for (const end = Date.now() + 10000; !(await readFile(path.join(server.workspace, 'config-started')).then(() => true, () => false));) { assert.ok(Date.now() < end, 'the lock\'s change started'); await new Promise((done) => setTimeout(done, 50)); }
+  const [chooser] = await Promise.all([page.waitForEvent('filechooser', { timeout: 10000 }), page.click('#attach')]);
+  await chooser.setFiles([{ name: 'notes.txt', mimeType: 'text/plain', buffer: Buffer.from('keep me') }]);
+  await page.waitForSelector('#attached .chip-file >> text=notes.txt', { timeout: 10000 });
+  await send(page, 'keep me and my file');
+  await page.waitForFunction(() => { const el = document.querySelector('#composerNote'); return !el.hidden && el.textContent.includes('no-write mode'); }, null, { timeout: 30000 });
+  assert.equal(await page.inputValue('#prompt'), 'keep me and my file');
+  assert.equal(await page.locator('#attached .chip-file >> text=notes.txt').count(), 1, 'the file is still attached');
+  await lock;
 });
 test('P4: the message box is one line empty, grows to six, then scrolls; 16 px text', { timeout: 60000 }, async (t) => {
   const { page } = await phoneOn(t);
