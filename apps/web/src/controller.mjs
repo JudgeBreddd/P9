@@ -1443,7 +1443,12 @@ moveDlg.addEventListener('keydown', e => { if (e.key === 'Enter' && !e.target.ma
 
 addEventListener('focus', () => renderChats());
 // Send to server shows only on this computer's chats, so the panes need the mode before Settings is first opened.
-if (window.p9?.server) window.p9.server().then(r => { serverInfo = r; renderChats(); renderTree(); serverMenu(); setLoad(); if (r?.slim) { applySettings(); dataNote(); } }, () => {});
+const readServer = () => window.p9?.server && window.p9.server().then(r => { serverInfo = r; renderChats(); renderTree(); serverMenu(); setLoad(); if (r?.slim) { applySettings(); dataNote(); } }, () => {});
+readServer();
+// O259: the remote answered for the first time after this window opened (shell-start.ts). What the window read from it at
+// start failed then, so it is read again here, in place of a reload: the mode (a slim remote has no Mission Control), the
+// setup checks and Mission Control. The chat list asks again by itself until it answers (loadChat).
+addEventListener('p9:remote-up', () => { readServer(); checkSetup(); loadMission(); });
 const PROBE_STATE = { p9: ['ok', 'P9 running'], 'no-p9': ['warn', 'P9 not running'], unreachable: ['bad', 'Unreachable'] };
 // The remote in use and the last one used come first, even when neither list holds them (the old badge's one click went to last).
 const machines = () => { const { host = null, last = null, hosts = [], remotes = [] } = serverInfo ?? {}; return { host, last, remotes, all: [...new Set([host, last, ...remotes, ...hosts])].filter(Boolean) }; };

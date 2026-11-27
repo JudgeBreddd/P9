@@ -1358,7 +1358,8 @@ async function loadChat() {
     // Settings or the New menu open while the lists were read: the Default model and effort rows, and the menu's rows, fill in.
     if (outer.$('#setDlg')?.open) outer.refreshDefaults();
   };
-  const list = async () => { let l; while ((l = await window.p9.chat('list', {})).status !== 200 && !outer.lifetime.signal.aborted) await new Promise(res => outer.setTimeout(res, 2000)); await loadAgents(); lists(l.body); await outer.loadProfiles(); await outer.loadStarts(); return l.body?.conversations || []; };
+  // O259: the remote answering for the first time (shell-start.ts p9:remote-up) asks again at once, not at the next 2 s.
+  const list = async () => { let l; while ((l = await window.p9.chat('list', {})).status !== 200 && !outer.lifetime.signal.aborted) await new Promise(res => { outer.setTimeout(res, 2000); addEventListener('p9:remote-up', res, { once: true, signal: AbortSignal.timeout(2000) }); }); await loadAgents(); lists(l.body); await outer.loadProfiles(); await outer.loadStarts(); return l.body?.conversations || []; };
   let sprintStale = false, sprintAt = 0;
   // The sessions from the list, once caught up: a chat not held here comes as a stub, and each one's archive, project and
   // sprint fields come from the list. After the launch's replay, and after a jump (O251), whose skipped events made chats too.
@@ -1492,7 +1493,8 @@ async function loadChat() {
     const r = scope ? await window.p9.chat('events', { after: outer.liveChat.cursor, ...(replaying ? { ...scope, ...tail } : { wait: 8000 }) }) : l;
     // A refused narrowed replay (a listed ID the bridge or daemon will not take) replays everything, as before E2.
     if (r.status === 400 && replaying && scope?.only) { scope = {}; continue; }
-    if (r.status !== 200) { if (!outer.liveChat.on && outer.sampleView) return; await new Promise(res => outer.setTimeout(res, outer.liveChat.on ? 2000 : 5000)); continue; }
+    // O259: the remote answering for the first time (p9:remote-up) asks again at once, not at the end of the wait.
+    if (r.status !== 200) { if (!outer.liveChat.on && outer.sampleView) return; const ms = outer.liveChat.on ? 2000 : 5000; await new Promise(res => { outer.setTimeout(res, ms); addEventListener('p9:remote-up', res, { once: true, signal: AbortSignal.timeout(ms) }); }); continue; }
     if (!outer.liveChat.on) { outer.liveChat.on = true; outer.S.sessions = []; outer.S.open = []; dataNote(); if (waitingNew) { const a = waitingNew; waitingNew = null; newSession(...a); } }
     // O251: a full page while live means this window fell behind (a sleep, a dropped link), and drawing every update since,
     // 500 at a time, took minutes over a remote. Jump instead, as a fresh launch would (jump, below).
