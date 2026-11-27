@@ -15,7 +15,16 @@ const call = (instance, route, method = 'GET', body) => http({ socketPath: path.
   body: body === undefined ? undefined : JSON.stringify(body) }).then((result) => ({ status: result.status, ...JSON.parse(result.text) }));
 
 test('O259: a window that opened before the remote answered is not reloaded when it does; its chat comes in place', { skip, timeout: 120000 }, async (t) => {
-  const local = await daemon(t), remote = await daemon(t, undefined, false, async () => ({ args: ['--acp-override', path.join(root, 'test/fake-acp-agent.mjs')] }));
+  // The remote's Mission: one waiting item, so the window shows it only once Mission Control reads the remote.
+  const local = await daemon(t), remote = await daemon(t, undefined, false, async ({ workspace, directory }) => {
+    await mkdir(path.join(workspace, '_waiting'), { recursive: true }); await mkdir(path.join(workspace, 'mission'));
+    await writeFile(path.join(workspace, 'AGENTS.md'), '# Workspace\n'); await writeFile(path.join(workspace, 'mission/registry.json'), '{}\n');
+    await writeFile(path.join(workspace, '_waiting/remote-question.md'), '# Remote question\n\nA.\n');
+    const settings = path.join(directory, '.config/p9/settings.json');
+    await mkdir(path.dirname(settings), { recursive: true });
+    await writeFile(settings, JSON.stringify({ primary: 'AGENTS.md', registry: 'mission/registry.json', waiting: '_waiting' }));
+    return { args: ['--acp-override', path.join(root, 'test/fake-acp-agent.mjs'), '--settings', settings] };
+  });
   const id = (await call(remote, '/chat', 'POST', { provider: 'claude' })).conversation;
   const directory = await mkdtemp(path.join(os.tmpdir(), 'p9-slow-start-'));
   const server = path.join(directory, 'server'), runtime = path.join(directory, 'local');
@@ -43,10 +52,11 @@ test('O259: a window that opened before the remote answered is not reloaded when
     .catch(() => ({ origin: null, say: 'page loading' }));
   // Each page load: when it started and when its shell was wired, in seconds from launch (from the page's own clock).
   const seen = [], origins = new Map(), sec = (ms) => Math.round(ms / 100) / 10;
+  const count = (l) => { if (l.origin) origins.set(l.origin, { start: sec(l.origin - start), wired: l.wired === undefined ? null : sec(l.origin + l.wired - start) }); };
   let usable = null;
   for (const end = Date.now() + 60000; !usable && Date.now() < end; await page.waitForTimeout(100)) {
     const l = await look(), at = Math.round((Date.now() - start) / 100) / 10;
-    if (l.origin) origins.set(l.origin, { start: sec(l.origin - start), wired: l.wired === undefined ? null : sec(l.origin + l.wired - start) });
+    count(l);
     if (seen.at(-1)?.say !== l.say) seen.push({ at, say: l.say });
     if (l.say === 'shell with the chat') {
       // Usable: the chat opens and takes typing.
@@ -55,17 +65,23 @@ test('O259: a window that opened before the remote answered is not reloaded when
       if (await box.isVisible().catch(() => false)) { await box.fill('typed'); if (await box.inputValue() === 'typed') usable = Math.round((Date.now() - start) / 100) / 10; }
     }
   }
-  // After the chat: what else the window holds once on the remote (cards, Mission Control, notes, toasts).
-  await page.waitForTimeout(6000);
+  // After the chat: 6 s more of page loads counted (a later reload fails too), then the remote's waiting item in Mission
+  // Control and what else the window holds once on the remote (cards, notes, toasts).
+  const sample = async () => count(await look());
+  for (const end = Date.now() + 6000; Date.now() < end; await page.waitForTimeout(100)) await sample();
+  await page.click('#rMission');
+  const item = await page.locator('#fMission .needs [data-list] li', { hasText: 'Remote question' }).waitFor({ timeout: 15000 }).then(() => true, () => false);
+  await sample();
   const after = await page.evaluate(() => ({ cards: [...document.querySelectorAll('#cards .card')].map((c) => c.dataset.key),
     mission: document.querySelector('#fMission')?.innerText.replace(/\s+/g, ' ').slice(0, 160), note: document.querySelector('#dataNote')?.textContent,
     label: document.querySelector('#daemonStatus')?.textContent, toasts: [...document.querySelectorAll('.toast')].map((x) => x.textContent) })).catch((error) => ({ error: error.message }));
-  console.log('P9_O259 ' + JSON.stringify({ usable, loads: [...origins.values()], seen, after }));
+  console.log('P9_O259 ' + JSON.stringify({ usable, loads: [...origins.values()], seen, item, after }));
   assert.ok(usable, 'the chat was not usable within 60 s: ' + JSON.stringify(seen));
   assert.ok(seen.some((s) => s.say === 'connecting layer'), 'the window did not open before the remote answered: ' + JSON.stringify(seen));
   assert.equal(origins.size, 1, 'the window loaded ' + origins.size + ' times: ' + JSON.stringify(seen));
   assert.equal(after.label, 'Connected to test-host');
   assert.doesNotMatch(after.mission ?? '', /not answering/, 'Mission Control still waits for the remote');
+  assert.ok(item, 'Mission Control does not show the remote\'s waiting item: ' + after.mission);
   assert.deepEqual(after.toasts.filter((x) => /unavailable|not answering/i.test(x)), [], 'a toast from the wait stayed');
   console.log('PASS O259: one load from launch to a usable chat on a slow remote');
 });

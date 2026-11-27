@@ -1493,7 +1493,8 @@ async function loadChat() {
     const r = scope ? await window.p9.chat('events', { after: outer.liveChat.cursor, ...(replaying ? { ...scope, ...tail } : { wait: 8000 }) }) : l;
     // A refused narrowed replay (a listed ID the bridge or daemon will not take) replays everything, as before E2.
     if (r.status === 400 && replaying && scope?.only) { scope = {}; continue; }
-    if (r.status !== 200) { if (!outer.liveChat.on && outer.sampleView) return; await new Promise(res => outer.setTimeout(res, outer.liveChat.on ? 2000 : 5000)); continue; }
+    // O259: the remote answering for the first time (p9:remote-up) asks again at once, not at the end of the wait.
+    if (r.status !== 200) { if (!outer.liveChat.on && outer.sampleView) return; const ms = outer.liveChat.on ? 2000 : 5000; await new Promise(res => { outer.setTimeout(res, ms); addEventListener('p9:remote-up', res, { once: true, signal: AbortSignal.timeout(ms) }); }); continue; }
     if (!outer.liveChat.on) { outer.liveChat.on = true; outer.S.sessions = []; outer.S.open = []; dataNote(); if (waitingNew) { const a = waitingNew; waitingNew = null; newSession(...a); } }
     // O251: a full page while live means this window fell behind (a sleep, a dropped link), and drawing every update since,
     // 500 at a time, took minutes over a remote. Jump instead, as a fresh launch would (jump, below).
