@@ -630,6 +630,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
   const heldAuthority = new Map();
   // O235: a closed sprint's lead says so in the list, so its card's Clear takes the lead too (projects.mjs closed(), same pref).
   const closedOf = (lead) => !!db.prepare('SELECT 1 FROM prefs WHERE key = ?').get('sprint-close:' + lead);
+  const pauseKey = (conversation, id) => [conversation?.parent, !sprintFiles.exists(id) && id].find((k) => k && pausedOf(k)); // prompt(), below
   const pausedOf = (lead) => {
     const value = ID.test(lead ?? '') ? db.prepare('SELECT value FROM prefs WHERE key = ?').get('paused:' + lead)?.value : undefined;
     if (value === undefined) return null;
@@ -1594,7 +1595,8 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
   }
   // Every way a waiting message leaves without being sent passes here, so a waiting question's asker is told here too.
   // from (#540 review 16): another chat's or P9's message; the window and the phone put only the user's own back in the box.
-  const unheld = (id, items, why) => { for (const item of items) { for (const x of [item.id, ...(item.was ?? [])]) emit(id, 'unheld', { id: x, text: item.body.text, why, ...(senders.has(item.body) && { from: senders.get(item.body) }) }); solos.get(item.body)?.end({ error: why }); } };
+  // ends (O260, drain): on its first event only.
+  const unheld = (id, items, why, ends) => { for (const item of items) { for (const x of [item.id, ...(item.was ?? [])]) { emit(id, 'unheld', { id: x, text: item.body.text, why, ...(senders.has(item.body) && { from: senders.get(item.body) }), ...(ends && { ends: true }) }); ends = false; } solos.get(item.body)?.end({ error: why }); } };
   // O188: each chat's count of turns and tool calls started (delegate.mjs: a worker's late wake is cancelled by either).
   const acts = new Map(), act = (id) => acts.set(id, (acts.get(id) ?? 0) + 1);
   function toolStep(id, session, update) {
@@ -1634,9 +1636,18 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     try { await api.cancel(id, undefined, true); } catch { nows.delete(item.body); markKept(id, item.id, { now: undefined }); return refused(502, 'cancel-failed'); }
     return { status: 200, ok: true };
   }
+  // O260: whether this turn's end sends a held message as a new turn at once (drain's gates, below); its turn-end says next,
+  // and the window shows no "finished" for it. A paused chat's counts as not (Resume sends it): at worst one notice more.
+  const goesOn = (id, session, cancelled) => {
+    const items = [...session.held, ...session.queued].filter((x) => !notes.has(x.body));
+    return items.length > 0 && (!cancelled || items.some((x) => nows.has(x.body))) && !closing && live.get(id) === session && !session.stopping && !pauseKey(row(id), id);
+  };
   // At a turn's end: one prompt of as many waiting messages as fit its limits, sent-now first, then held; the rest wait for its end.
   // A cancelled turn hands the rest back (unheld 'cancelled'), unless one was sent now: then they wait behind it.
-  async function drain(id, session, cancelled) {
+  // O260 next: the end said a turn goes on. When none does, the first message handed back says ends, and the window shows
+  // "finished" then (twice at worst: one handed back while the others go).
+  async function drain(id, session, cancelled, next) {
+    const back = (items, why) => { if (items.length) { unheld(id, items, why, next); next = false; } };
     const all = [...session.held.splice(0), ...session.queued.splice(0)].sort((x, y) => nows.has(y.body) - nows.has(x.body));
     // A note that did not get into the turn waits for the chat's next prompt: it starts none, and a cancel does not lose it.
     const items = all.filter((item) => !notes.has(item.body));
@@ -1648,15 +1659,15 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     if (!items.length) return;
     // O109: P9 shutting down is not the user's Stop: what hold() kept in resuming:<chat> stays waiting, and the next
     // start sends it (resumeLeft). Only what was not kept is told as not sent.
-    if (closing && !cancelled) { const kept = new Set(resumingOf(id).map((i) => i.queued)); return unheld(id, items.filter((item) => !kept.has(item.id)), 'stopped'); }
-    if ((cancelled && !(nows.has(items[0].body) && items[0].allowed())) || live.get(id) !== session || session.stopping) return unheld(id, items, cancelled ? 'cancelled' : 'stopped');
+    if (closing && !cancelled) { const kept = new Set(resumingOf(id).map((i) => i.queued)); return back(items.filter((item) => !kept.has(item.id)), 'stopped'); }
+    if ((cancelled && !(nows.has(items[0].body) && items[0].allowed())) || live.get(id) !== session || session.stopping) return back(items, cancelled ? 'cancelled' : 'stopped');
     const gone = items.filter((item) => !item.allowed());
-    unheld(id, gone, 'session-ended');
+    back(gone, 'session-ended');
     // A question is checked again when its turn comes: one that waited while the user closed this chat to questions, or
     // while its asker stopped being a chat beside this one (moved to another project), is not answered.
     for (const item of items.filter((x) => !gone.includes(x) && solos.has(x.body))) {
       const why = !api.askable(id) ? 'not-askable' : solos.get(item.body).still?.() === false ? 'not-a-peer' : null;
-      if (why) { unheld(id, [item], why); gone.push(item); }
+      if (why) { back([item], why); gone.push(item); }
     }
     const send = [];
     let text = '', images = [], mode, model, config = {}, rest = false;
@@ -1685,7 +1696,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     else if (from[0]) titles.set(body, titles.get(send[0].body) ?? null); // O73 FIX1: one sender's queued messages keep its send-time title
     if (repeats.has(send[0].body)) repeats.add(body);
     const result = await authority.run(allowed, () => api.prompt(id, body, send.flatMap((item) => [item.id, ...(item.was ?? [])]), from.length > 1 ? undefined : from[0], solos.get(send[0].body))).catch(() => refused(403, 'session-ended'));
-    if (result.status !== 202) { unheld(id, send, result.error ?? 'refused'); unheld(id, session.queued.splice(0), result.error ?? 'refused'); }
+    if (result.status !== 202) { back(send, result.error ?? 'refused'); back(session.queued.splice(0), result.error ?? 'refused'); }
     else settleResumed(send.map((item) => item.id)); // O109: taken, so a restart from here on does not send it again
   }
 
@@ -1877,7 +1888,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       // and so does a note, which starts nothing. Another chat's question is refused: its asker waits on the answer.
       // O141: a worker its lead holds (paused:<worker>, pause_sprint with chat) keeps them the same way; its sprint's pause first.
       // A lead's own id is its sprint's key, so it is checked only for a chat that leads no sprint.
-      const pausedAt = (from || mixed.has(body)) && !notes.has(body) ? [conversation.parent, !sprintFiles.exists(id) && id].find((k) => k && pausedOf(k)) : undefined;
+      const pausedAt = (from || mixed.has(body)) && !notes.has(body) ? pauseKey(conversation, id) : undefined;
       const pausing = pausedAt && pausedOf(pausedAt);
       const bare = commands.has(body);
       if (pausing) {
@@ -2071,7 +2082,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       clearTimeout(session.quiet); session.quiet = null; // O192: likewise for a resumed run
       session.marked = null; // O194: the prompt ends a marked run too (the adapter ends its mark as it takes the prompt)
       compacted.end(session, id, false);
-      let ended;
+      let ended, next = false;
       // Notes that waited for this chat go in first, each one block under its own sender line. Not into a turn that
       // answers another chat: they wait for the chat's own next message.
       const told = solo || bare ? [] : waitingFor(id).splice(0);
@@ -2083,7 +2094,8 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       if (rules?.started) sending.set(id, rules.start);
       // result.usage is the turn's token counts (ACP PromptResponse); the usage view sums them, or counted (O190, ledger.mjs:
       // the reply's model_usage, compactions included) when the reply has it.
-      const done = (result) => { ended = result; untake(id); if (rules?.started) startSent(id); if (session.turn === turn) { const all = counted(result); emit(id, 'turn-end', { stopReason: result.stopReason, ...(result.usage && { usage: result.usage }), ...(all && { counted: all }) }); for (const hook of turnEndedHooks) { try { hook(id, turn, Boolean(solo), result.usage); } catch {} } } };
+      // O260 next: drain, at this end, sends a held message as a new turn (goesOn).
+      const done = (result) => { ended = result; untake(id); if (rules?.started) startSent(id); if (session.turn === turn) { const all = counted(result); next = goesOn(id, session, result.stopReason === 'cancelled' || session.halt === turn); emit(id, 'turn-end', { stopReason: result.stopReason, ...(result.usage && { usage: result.usage }), ...(all && { counted: all }), ...(next && { next }) }); for (const hook of turnEndedHooks) { try { hook(id, turn, Boolean(solo), result.usage); } catch {} } } };
       // new Promise: a synchronous throw is a failed prompt too, so the start block is freed, not held as on its way.
       // MC-15: the files the turn changed outside its edit calls, as one finished edit call, before its turn-end (or error).
       const shellEdits = () => shellFrom.then((from) => shellEnd(from, session.cwd, edits.named)).then((content) => {
@@ -2145,7 +2157,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
         }
         // Nor after a turn that answered another chat: its asker has the reply, and it was not the parent's task.
         else if (!more && !session.stopping && ended?.stopReason !== 'cancelled') for (const hook of settledHooks) { try { hook(id, Boolean(ended)); } catch {} }
-        drain(id, session, ended?.stopReason === 'cancelled' || session.halt === turn); // a Stop as it ended: still stopped
+        drain(id, session, ended?.stopReason === 'cancelled' || session.halt === turn, next); // a Stop as it ended: still stopped
       });
       return { status: 202, turn };
     },
