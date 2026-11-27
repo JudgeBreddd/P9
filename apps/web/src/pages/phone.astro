@@ -55,6 +55,8 @@ import '../styles/code-colours.css';
           <!-- O109: the running turn's latest step, one line, so a long turn reads without scrolling the chat. -->
           <div id="nowStep" role="status" hidden></div>
           <div id="queued" class="stack" aria-live="polite" hidden></div>
+          <!-- O262: the send on its way, or with no answer yet, apart from the box (phone.ts renderSending). -->
+          <div id="sending" role="status" hidden></div>
           <!-- P18: sending while the agent works, as the desktop's Steer / Queue chip and its Ctrl Enter interrupt. -->
           <div id="midTurn" role="group" aria-label="Send while the agent works" hidden><span id="midTurnLabel">Claude is working</span><button type="submit" form="composer" data-when="steer" title="Send into this turn when its current step ends">Steer</button><button type="submit" form="composer" class="quiet" data-when="queue" title="Send when this turn ends">Queue</button><button type="submit" form="composer" class="quiet" data-when="now" title="Stop this turn and send this now">Interrupt</button></div>
           <div id="box">

@@ -1026,6 +1026,13 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
     });
     // Operation IDs bind to the device, so one device can never replay or read another device's stored reply.
     remoteApp.use('*', operations(ledger, (c) => 'device:' + c.get('device')));
+    // O262: what became of one of this device's own operations, as its replay would say, for a retry that cannot rebuild its body
+    // (the phone's Send again when a file it carried is gone from the phone). Bound to the device as the replay is.
+    remoteApp.get('/operation/:id', (c) => {
+      const row = ledger.operation(c.req.param('id'));
+      if (!row || row.login !== 'device:' + c.get('device')) return c.json({ state: 'unknown' }, 404);
+      return c.json(row.state === 'done' ? { state: 'done', status: row.status, body: row.body } : { state: row.state });
+    });
     remoteApp.get('/', (c) => c.redirect('/phone/'));
     remoteApp.get('/phone', (c) => c.redirect('/phone/'));
     remoteApp.get('/phone/', async (c) => c.html(await readAsset(path.join(webRoot, 'phone', 'index.html'), 'utf8')));
