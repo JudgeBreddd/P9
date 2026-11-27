@@ -872,18 +872,17 @@ export function createDelegate({ chat, allowed, usage }) {
     return { ready: value, ...(reviewer && { queued: reviewer.id }) };
   }
   // O243: the third fix asks the lead for a step up from the model the worker runs on (its live session's, else its newest
-  // config's, as send_chat reads it): only the larger families, nothing about models on Fable, and a plain "a larger
-  // model" for any other name (default, opusplan, none read yet). The ladder is only for a plain Claude chat (provider
-  // claude, no profile): a profile may name its model fable while that routes to a smaller one, and another agent's models
-  // are not on it, so those get the plain notice. A family is read only from the forms P9 stores: a bare alias or a
-  // claude-<family>-... id, either with an optional [1m].
+  // config's, as send_chat reads it): only the larger families of its agent's ladder (agents.mjs), nothing about models at
+  // the top, and a plain "a larger model" for any other name (default, opusplan, none read yet). An agent with no ladder,
+  // or a provider profile (it may name its model fable while that routes to a smaller one), gets the plain notice. A family
+  // is read only from the forms P9 stores: a bare alias or a claude-<family>-... id, either with an optional [1m].
   // ponytail: no cloud prefix (us.anthropic., an ARN) is read; no adapter P9 runs reports one, and such a name gets the plain notice.
-  const LADDER = ['haiku', 'sonnet', 'opus', 'fable'], OR = new Intl.ListFormat('en', { type: 'disjunction' });
-  const FAMILY = /^(?:claude-(haiku|sonnet|opus|fable)(?:-[a-z0-9.-]+)?|(haiku|sonnet|opus|fable))(?:\[1m\])?$/;
+  const OR = new Intl.ListFormat('en', { type: 'disjunction' });
   const thirdFix = (item, worker) => {
-    const c = chat.info?.(worker.id), plain = c?.provider === 'claude' && !c.profile;
-    const model = plain ? String(c.model ?? chat.gauge?.(worker.id)?.model ?? '').toLowerCase() : '';
-    const m = FAMILY.exec(model), at = LADDER.indexOf(m?.[1] ?? m?.[2]), up = LADDER.slice(at + 1).map((f) => f[0].toUpperCase() + f.slice(1));
+    const c = chat.info?.(worker.id), ladder = (!c?.profile && CATALOG.find((a) => a.id === c?.provider)?.ladder) || [], f = ladder.join('|');
+    const model = ladder.length ? String(c.model ?? chat.gauge?.(worker.id)?.model ?? '').toLowerCase() : '';
+    const m = new RegExp(`^(?:claude-(${f})(?:-[a-z0-9.-]+)?|(${f}))(?:\\[1m\\])?$`).exec(model);
+    const at = ladder.indexOf(m?.[1] ?? m?.[2]), up = ladder.slice(at + 1).map((n) => n[0].toUpperCase() + n.slice(1));
     return `[p9] ${item} by ${worker.title} got its third fix` + (at < 0 ? ': give the correction to a larger model.' : up.length ? `: give the correction to a larger model (${OR.format(up)}).` : '.');
   };
   function verdict(caller, args) {
