@@ -1006,8 +1006,8 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     const set = (session.setChain ?? Promise.resolve()).then(send);
     // #540 reviews 15 and 16: a set the adapter never answers would hold the chain, and every later prompt is refused ("An
     // earlier setting has not answered"). Past SET_CAP_MS a mode set not answered retires the session, lock on or off: its
-    // adapter is stopped, even mid-turn, so a late mode answer can never land on a later turn, and the chat's next prompt
-    // starts a clean one. The chat says why. A model or effort set only frees the chain: the turn runs on.
+    // adapter is stopped, even mid-turn, so a late mode answer can never land on a later turn. The chat says it is stopping
+    // it; the stop's own event says how that ended. A model or effort set only frees the chain: the turn runs on.
     // ponytail: a late model or effort answer can still land on a later turn; only the mode is guarded.
     let cap;
     const capped = new Promise((resolve) => { cap = setTimeout(resolve, SET_CAP_MS, 'cap'); });
@@ -1015,7 +1015,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       clearTimeout(cap);
       if (how !== 'cap' || live.get(session.id) !== session || session.stopping) return;
       if (configId !== 'mode') return;
-      emit(session.id, 'error', { message: 'The agent did not answer a setting for ' + Math.round(SET_CAP_MS / 1000) + ' s, so P9 stopped it. Your next message starts it again.' });
+      emit(session.id, 'error', { message: 'The agent did not answer a setting for ' + Math.round(SET_CAP_MS / 1000) + ' s, so P9 is stopping it.' });
       stopConversation(session.id);
     }).finally(() => { session.setWaits -= 1; });
     return ms ? Promise.race([set, wait(ms).then(() => { gaveUp = true; throw new Error('timeout'); })]) : set;
