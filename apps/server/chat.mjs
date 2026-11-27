@@ -1005,23 +1005,27 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     session.setWaits = (session.setWaits ?? 0) + 1;
     const set = (session.setChain ?? Promise.resolve()).then(send);
     // #540 reviews 15 and 16: a set the adapter never answers would hold the chain, and every later prompt is refused ("An
-    // earlier setting has not answered"). Past SET_CAP_MS a mode set not answered retires the session, lock on or off: its
-    // adapter is stopped, even mid-turn, so a late mode answer can never land on a later turn. The chat says it is stopping
-    // it; the stop's own event says how that ended. A model or effort set only frees the chain: the turn runs on.
-    // ponytail: a late model or effort answer can still land on a later turn; only the mode is guarded.
+    // earlier setting has not answered"). Past SET_CAP_MS any set not answered (mode, model or effort) retires the session,
+    // lock on or off: its adapter is stopped, even mid-turn, so no late answer can land after a later set, a lock's
+    // included (O273). The chat says it is stopping it; the stop's own event says how that ended.
     let cap;
     const capped = new Promise((resolve) => { cap = setTimeout(resolve, SET_CAP_MS, 'cap'); });
     session.setChain = Promise.race([set.catch(() => {}), capped]).then((how) => {
       clearTimeout(cap);
       if (how !== 'cap' || live.get(session.id) !== session || session.stopping) return;
-      if (configId !== 'mode') return;
       emit(session.id, 'error', { message: 'The agent did not answer a setting for ' + Math.round(SET_CAP_MS / 1000) + ' s, so P9 is stopping it.' });
       stopConversation(session.id);
     }).finally(() => { session.setWaits -= 1; });
     return ms ? Promise.race([set, wait(ms).then(() => { gaveUp = true; throw new Error('timeout'); })]) : set;
   };
-  const setMode = (session, provider, value = modeFor(provider), tell = true, ms) => setOption(session, 'mode', value,
-    (result) => { session.mode = result?.configOptions?.find((o) => o.id === 'mode')?.currentValue ?? value; if (tell) tellMode(session, provider); return result; }, ms); // P6: the phone's pill shows the mode set
+  // O273: session.mode is only what the answer names, never the value asked for; a no-write mode (the lock's, a solo turn's)
+  // the answer does not name is a set that failed, so every path that waits on it (start, toggle, prompt) treats it so.
+  const setMode = (session, provider, value = modeFor(provider), tell = true, ms) => setOption(session, 'mode', value, (result) => {
+    session.mode = result?.configOptions?.find((o) => o.id === 'mode')?.currentValue;
+    if (value === NARROW[provider] && session.mode !== value) throw new Error('The agent did not confirm its no-write mode.');
+    if (tell && session.mode) tellMode(session, provider); // P6: the phone's pill shows the mode set
+    return result;
+  }, ms);
   // The chat's Mode picker, sent with each desktop prompt (Auto still asked before every command). Codex's
   // four are its own (contracts.md rule 2); Full access and Claude's bypass are threat model row 25. The lock wins over all.
   // MODES: from the catalog (agents.mjs).
@@ -1071,7 +1075,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
   // was: read before anything is set on the new session (resume sets Codex's and the lock's mode first, which is an event too).
   const lastPicks = (id) => ({ config: lastOf(id, 'config'), mode: lastOf(id, 'mode')?.mode });
   const carry = async (session, conversation, options, { config: was, mode } = lastPicks(conversation.id)) => {
-    const set = async (configId, value) => (await session.agent.setSessionConfigOption({ sessionId: session.sessionId, configId, value }))?.configOptions;
+    const set = (configId, value) => setOption(session, configId, value, (result) => result?.configOptions); // O273: on the one chain
     const listed = models(session, conversation.id, options, false), model = was?.model?.current;
     if (listed && typeof model === 'string' && model !== session.models.current && session.models.options.some((o) => o.value === model)) {
       try { if (!models(session, conversation.id, await set('model', model), false)) session.models.current = model; } catch {}
@@ -1774,8 +1778,10 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
         // A turn answering another chat is in the no-write mode already and stays there: unlocking only changes where it returns to.
         if (session.solo && !locked) { session.back = modeFor(row(id).provider); return; }
         if (!session.solo) session.back = undefined;
+        // O273: a failed set stops the chat only while this toggle is the newest; a newer one's own set, behind this one on
+        // the chain, decides (it stops the chat itself if the lock is on and that set fails too).
         try { await setMode(session, row(id).provider, undefined, true, 5000); }
-        catch { if (locked) await stopConversation(id); }
+        catch { if (locked && lockRev === mine) await stopConversation(id); }
       }));
       return { status: 200, on: locked, rev: lockRev === mine ? mine : null };
     },

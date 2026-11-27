@@ -289,3 +289,58 @@ test('O267b: another chat\'s message revoked during the start snapshot is handed
   assert.deepEqual((await lines(path.join(dir, 'calls.log'))).filter((l) => l.endsWith(' prompt')), []);
   console.log('PASS O267b revoked from: unheld with from, an ending error line, nothing sent');
 });
+
+// O273: the agent lock is set through the one per-session chain of settings. The three cases below fail without it.
+const said = (text) => (e) => e.type === 'update' && e.data?.content?.text === text;
+
+// Case 1: two toggles overlap. The older one's set fails (the adapter refuses the writable mode); the newer lock's own
+// set, behind it on the chain, decides. The chat is not stopped, and its next prompt runs in the no-write mode.
+test('O273: an older lock toggle whose set fails does not stop a chat a newer lock is switching', async (t) => {
+  const { chat, dir, id, seen, until } = await setup(t, 'o273-toggles');
+  assert.equal((await chat.setLock({ on: true })).on, true);
+  await writeFile(path.join(dir, 'fail-mode'), 'default');
+  const both = await Promise.all([chat.setLock({ on: false }), chat.setLock({ on: true })]);
+  assert.deepEqual(both.map((b) => b.on), [true, true]);
+  await unlink(path.join(dir, 'fail-mode'));
+  assert.equal((await chat.prompt(id, { text: 'mode' })).status, 202);
+  await until(said('mode:plan'), 'the prompt ran in the no-write mode');
+  assert.ok(!seen.some((e) => e.type === 'stopped'), 'the older unlock\'s failure stopped the chat');
+  console.log('PASS O273 toggles: the older unlock failed, the newer lock decided, the chat ran on in plan');
+});
+
+// Case 2: an adapter that answers a set without naming the mode. P9 does not take the no-write mode as set: the lock
+// stops the live chat, and a start under the lock sends no prompt.
+test('O273: a no-write mode the adapter does not name is not taken as set', async (t) => {
+  const { chat, dir, id, seen, until } = await setup(t, 'o273-quiet');
+  await writeFile(path.join(dir, 'quiet-config'), '');
+  await writeFile(path.join(dir, 'calls.log'), '');
+  assert.equal((await chat.setLock({ on: true })).on, true);
+  const r = await chat.prompt(id, { text: 'after the lock' });
+  assert.deepEqual((await lines(path.join(dir, 'calls.log'))).filter((l) => l.endsWith(' prompt')), [], 'a prompt went to an agent that never confirmed its no-write mode');
+  assert.notEqual(r.status, 202, JSON.stringify(r));
+  await until((e) => e.type === 'stopped', 'the unconfirmed lock stopped the chat');
+  assert.ok(!seen.some(echoed('after the lock')));
+  console.log('PASS O273 quiet: the unconfirmed lock stopped the chat; the start under it got ' + r.status + ' and sent nothing');
+});
+
+// Case 3: a model set the adapter does not answer. Past the cap the session is retired, as for a mode set, so a later
+// set (here the lock's) never goes while it is open and its late answer cannot land after the lock.
+test('O273: a model set not answered past the cap retires the session, so a lock\'s set never goes behind it', { timeout: 60000 }, async (t) => {
+  const { chat, dir, id, until, started } = await setup(t, 'o273-late-model', true, { P9_SET_CAP_MS: '2500' });
+  await writeFile(path.join(dir, 'overlaps.log'), '');
+  await writeFile(path.join(dir, 'hang-model'), '');
+  const first = chat.prompt(id, { text: 'on haiku', model: 'haiku' });
+  await started();
+  await pause(3500); // past the cap
+  assert.equal((await chat.setLock({ on: true })).on, true);
+  await unlink(path.join(dir, 'hang-model')); // the model set answers now, late
+  const r = await first;
+  await pause(300);
+  assert.equal(await readFile(path.join(dir, 'overlaps.log'), 'utf8'), '', 'a set went to the adapter while the model set was open');
+  assert.notEqual(r.status, 202, JSON.stringify(r));
+  await until((e) => e.type === 'error' && /did not answer a setting/.test(e.data?.message), 'the cap retired the session');
+  await until((e) => e.type === 'stopped', 'stopped');
+  assert.equal((await chat.prompt(id, { text: 'mode' })).status, 202);
+  await until(said('mode:plan'), 'a clean adapter ran in the no-write mode');
+  console.log('PASS O273 late model: the cap retired the session; no set overlapped; the next prompt ran in plan');
+});

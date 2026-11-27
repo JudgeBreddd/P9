@@ -77,7 +77,7 @@ const png = (w, h) => {
   ihdr.writeUInt32BE(w, 0); ihdr.writeUInt32BE(h, 4); ihdr.set([8, 2, 0, 0, 0], 8);
   return Buffer.concat([Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), chunk('IHDR', ihdr), chunk('IDAT', deflateSync(raw)), chunk('IEND', Buffer.alloc(0))]).toString('base64');
 };
-let squeezes = 0, mode = 'unset', model = process.env.ANTHROPIC_MODEL ?? 'default', cwd = '', mcpServers = null, folder = '';
+let inflight = 0, squeezes = 0, mode = 'unset', model = process.env.ANTHROPIC_MODEL ?? 'default', cwd = '', mcpServers = null, folder = '';
 // claude-home (Send to server, D14): a transcript where Claude Code keeps one, <home>/.claude/projects/<folder>/<id>.jsonl,
 // and a resume only of a session whose transcript is there (claude-agent-acp's findTranscript searches every folder).
 // The home is the test's (XDG_STATE_HOME, which the daemon passes on); never HOME, so a test cannot write a real one.
@@ -200,7 +200,20 @@ const connection = acp.connectAgent(stream, {
     return { configOptions: configOptions() };
   },
   async closeSession() { if (existsSync('slow-close')) await new Promise((resolve) => setTimeout(resolve, 2000)); return {}; },
+  // O273: overlaps.log, when present, gets a line for each set that arrives while another is unanswered; hang-model holds
+  // a model set until the file goes; fail-mode refuses a mode set to the value it names; quiet-config answers a set
+  // without naming any option (the mode included).
   async setSessionConfigOption(params) {
+    if (inflight++ && existsSync('overlaps.log')) appendFileSync('overlaps.log', params.configId + '=' + params.value + '\n');
+    try {
+      if (params.configId === 'model' && existsSync('hang-model')) { writeFileSync('config-started', ''); while (existsSync('hang-model')) await new Promise((resolve) => setTimeout(resolve, 25)); }
+      if (params.configId === 'mode' && existsSync('fail-mode') && readFileSync('fail-mode', 'utf8').trim() === String(params.value)) throw new Error('mode refused');
+      const answer = await this.setOne(params);
+      return existsSync('quiet-config') ? {} : answer;
+    } finally { inflight -= 1; }
+  },
+  async cancel(params) { cancelled.add(params.sessionId); },
+  async setOne(params) {
     // #540 review 10: slow-config holds every setting 3 s (or the ms the file says: review 12, past P9's 5 s wait), and
     // config-started says one is under way (an Interrupt sent then).
     // O267b: exit-config, put in during that wait, ends the adapter there (an adapter that exits while a start sets its model);
@@ -221,7 +234,6 @@ const connection = acp.connectAgent(stream, {
     else if (Object.hasOwn(picked, params.configId)) { picked[params.configId] = String(params.value); } else mode = String(params.value);
     return { configOptions: configOptions() };
   },
-  async cancel(params) { cancelled.add(params.sessionId); },
   async prompt(params) {
     called('prompt');
     const { sessionId } = params, say = (reply) => connection.sessionUpdate({ sessionId, update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: reply } } });
