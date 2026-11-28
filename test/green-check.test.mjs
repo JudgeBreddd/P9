@@ -185,3 +185,39 @@ test('green check ignores runs by hand: a green named run after red PR CI refuse
   assert.equal(bare.status, 0, bare.out);
   refused(run({ runs: [byHand], jobsOf, logs: { 21: LOG } }), 'no CI run on abcdef12');
 });
+
+// #574 pipeline re-read #2, #580 r1 (O293): quick's log says whether the heavy jobs were due. A run that skipped them while
+// due (a draft's, or one read before marking it ready started the full run) is no evidence; another run on the commit that
+// passed them is. A Markdown-only change (heavy false) skips them and passes.
+test('green check refuses a commit whose only run skipped heavy jobs that were due; a full run or a Markdown-only change passes', () => {
+  const base = { name: 'Tests', event: 'pull_request', status: 'completed', conclusion: 'success' };
+  const quick = (id, heavy) => ({ id, name: 'quick', conclusion: 'success', log: `2026-11-20T10:00:00.0000000Z heavy jobs: ${heavy}\n` + LOG });
+  const shaped = (list) => ({ jobs: list.map(({ log, ...j }) => j), logs: Object.fromEntries(list.filter((j) => j.log).map((j) => [j.id, j.log])) });
+  const draft = shaped([quick(11, true), { id: 12, name: 'linux (0)', conclusion: 'skipped' }, { id: 13, name: 'windows (x64)', conclusion: 'skipped' }]);
+  refused(run({ runs: [{ ...base, id: 1 }], jobsOf: { 1: draft.jobs }, logs: draft.logs }), 'the heavy jobs were due on abcdef12 and no run passed them');
+  const full = shaped([quick(21, true), { id: 22, name: 'linux (0)', conclusion: 'success', log: LOG }, { id: 23, name: 'windows (x64)', conclusion: 'success', log: LOG }, { id: 24, name: 'tests', conclusion: 'success', log: 'tests ok' }]);
+  // #580 r2: one platform, or both without a passed `tests` job, is not the heavy result.
+  for (const drop of [23, 24]) {
+    const part = shaped([quick(21, true), ...full.jobs.filter((j) => j.id !== 21 && j.id !== drop).map((j) => ({ ...j, log: full.logs[j.id] }))]);
+    refused(run({ runs: [{ ...base, id: 2 }], jobsOf: { 2: part.jobs }, logs: part.logs }), 'the heavy jobs were due on abcdef12 and no run passed them');
+  }
+  const both = run({ runs: [{ ...base, id: 1 }, { ...base, id: 2 }], jobsOf: { 1: draft.jobs, 2: full.jobs }, logs: { ...draft.logs, ...full.logs } });
+  assert.equal(both.status, 0, both.out);
+  const md = shaped([quick(11, false), { id: 12, name: 'linux (0)', conclusion: 'skipped' }]);
+  const markdown = run({ runs: [{ ...base, id: 1 }], jobsOf: { 1: md.jobs }, logs: md.logs });
+  assert.equal(markdown.status, 0, markdown.out);
+  refused(run({ runs: [{ ...base, id: 1 }], jobsOf: { 1: [{ id: 11, name: 'quick', conclusion: 'success' }] }, logs: { 11: LOG } }), "quick's log on abcdef12 does not say whether the heavy jobs were due");
+});
+
+// #580 r1 (O293): the quarantine job never blocks, so a run still going only for it is complete once `tests` and every
+// other job finished; still going for any other job, or before `tests` finished, it is not.
+test('green check: a run still going only for its quarantine job passes; one still going for another job does not', () => {
+  const going = { id: 1, name: 'Tests', event: 'pull_request', status: 'in_progress', conclusion: null };
+  const jobs = [{ id: 11, name: 'linux (0)', status: 'completed', conclusion: 'success' }, { id: 12, name: 'tests', status: 'completed', conclusion: 'success' },
+    { id: 13, name: 'linux (quarantine)', status: 'in_progress', conclusion: null }];
+  const ok = run({ runs: [going], jobs, logs: { 11: LOG, 12: 'tests ok' } });
+  assert.equal(ok.status, 0, ok.out);
+  refused(run({ runs: [going], jobs: jobs.map((j) => j.id === 11 ? { ...j, status: 'in_progress', conclusion: null } : j), logs: { 12: 'tests ok' } }), 'is not complete (Tests)');
+  refused(run({ runs: [going], jobs: jobs.filter((j) => j.id !== 12), logs: { 11: LOG } }), 'is not complete (Tests)');
+  refused(run({ runs: [going], jobs: jobs.map((j) => j.id === 11 ? { ...j, conclusion: 'failure' } : j), logs: { 11: LOG, 12: 'tests ok' } }), 'is not green (Tests failed job)');
+});

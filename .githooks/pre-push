@@ -1,5 +1,7 @@
 #!/bin/sh
 set -eu
+# #580 r1 (O293): only the dependency-free scan; a clean or out-of-date install cannot refuse a push. CI's quick job runs
+# the rest of `pnpm quick` (licences, type check) on every PR.
 node scripts/scan.mjs
 # Only the commits this push adds (git gives one "<local ref> <local sha> <remote ref> <remote sha>" line per ref): main's
 # old history already holds test fixtures and notes that name private paths (H3, 0.1.8), so a grep of all history could

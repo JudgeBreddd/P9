@@ -130,16 +130,14 @@ jobs:
       # One shard failing still finishes the others, so a red run names every failing file.
       fail-fast: false
       matrix:
-        # files (dispatch) runs just those files, on one runner. C1 (O286): "quarantine" runs test/quarantine.json's tests
-        # and shell-bundle's warm-usable timing (P9_TIMED), prints pass or fail for each, and never blocks.
-        shard: ${{ fromJSON(inputs.files && '[0]' || '[0, 1, 2, 3, 4, 5, 6, "quarantine"]') }}
+        # files (dispatch) runs just those files, on one runner. The quarantine shard is the job below.
+        shard: ${{ fromJSON(inputs.files && '[0]' || '[0, 1, 2, 3, 4, 5, 6]') }}
     runs-on: ubuntu-26.04
-    continue-on-error: ${{ matrix.shard == 'quarantine' }}
     timeout-minutes: 30
-    env:
+    env: &linux-env
       GITLEAKS: 8.30.1
       GITLEAKS_SHA256: 551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
-    steps:
+    steps: &linux-steps
       - uses: actions/checkout@v7
       - uses: pnpm/action-setup@v6
       - uses: actions/setup-node@v7
@@ -196,10 +194,14 @@ jobs:
           # open row (test/quarantine.json): the shards skip it, this job's quarantine shard runs it and reports. Still never
           # retried. The quarantine shard exits 0; its summary says which tests failed.
           if [ "$SHARD" = quarantine ]; then
-            QPAT=$(node test/shard.mjs pattern); QFILES=$(node test/shard.mjs quarantine)
-            P9_TIMED=1 run test/shell-bundle.test.mjs || true
-            if [ -n "$QFILES" ]; then run --test-name-pattern="$QPAT" $QFILES || true; fi
-            { echo '### Quarantined tests (not blocking)'; grep -E '^\s*(✔|✖) ' "$RUNNER_TEMP/tests.log" | grep -v 'failing tests' || echo 'no result lines'; } >> "$GITHUB_STEP_SUMMARY"
+            # #573 r1 #4, #580 r1 (O293): each call's exit code and each entry's outcome, so a call that dies before any result
+            # shows. Each quarantined file runs alone with only its own entries' pattern, so a same-title test elsewhere never runs.
+            touch "$RUNNER_TEMP/tests.log"; timed=0; calls=
+            P9_TIMED=1 run test/shell-bundle.test.mjs || timed=$?
+            for f in $(node test/shard.mjs quarantine); do c=0; run --test-name-pattern="$(node test/shard.mjs pattern "$f")" "$f" || c=$?; calls="$calls $f exit $c;"; done
+            { echo '### Quarantined tests (not blocking)'; echo "- shell-bundle timing call: exit $timed"; echo "- quarantined test calls:${calls:- none listed}"
+              node test/shard.mjs report "$RUNNER_TEMP/tests.log"; grep -E '^\s*(✔|✖) ' "$RUNNER_TEMP/tests.log" | grep -v 'failing tests' || echo 'no result lines'; } >> "$GITHUB_STEP_SUMMARY"
+            touch "$RUNNER_TEMP/quarantine-reported"
             grep -E '^\s*(✔|✖) ' "$RUNNER_TEMP/tests.log" || true
             exit 0
           fi
@@ -217,6 +219,11 @@ jobs:
             run "${SKIP[@]}" $FILES || rc=$?
           done
           exit $rc
+      # #580 r1 (O293): a setup step that failed (install, build) skips the Tests step and its summary; say so.
+      - name: Quarantine summary
+        if: ${{ always() && matrix.shard == 'quarantine' }}
+        run: |
+          [ -f "$RUNNER_TEMP/quarantine-reported" ] || printf '### Quarantined tests (not blocking)\n- no report: a step before Tests failed, or Tests stopped before its summary (see the job log)\n' >> "$GITHUB_STEP_SUMMARY"
       # The output the result rests on, kept on every run (a failure too), not only in the job log.
       - name: Test output
         if: always()
@@ -234,6 +241,22 @@ jobs:
           path: ${{ runner.temp }}/evidence
           retention-days: 7
           if-no-files-found: warn
+
+  # C1 (O286): runs test/quarantine.json's tests and shell-bundle's warm-usable timing (P9_TIMED), prints pass or fail for
+  # each, and never blocks. #577 r1 #3 (O293): its own job, not a leg of linux, so `tests` (which needs linux) never waits
+  # for it; the linux job's env and steps (YAML anchors), with a one-entry matrix so matrix.shard reads quarantine.
+  quarantine:
+    name: linux (${{ matrix.shard }})
+    needs: quick
+    if: ${{ !cancelled() && !inputs.bare && !inputs.windows && !inputs.files && needs.quick.result == 'success' && needs.quick.outputs.heavy == 'true' && !github.event.pull_request.draft }}
+    strategy:
+      matrix:
+        shard: [quarantine]
+    runs-on: ubuntu-26.04
+    continue-on-error: true
+    timeout-minutes: 30
+    env: *linux-env
+    steps: *linux-steps
 
   # The Windows-only tests on a real Windows machine of each architecture, no installer build (0.1.8 F1: they ran inside
   # windows-installer.yaml's installer job until installers moved to tags). The host (.cmd through cmd.exe, a new console,
