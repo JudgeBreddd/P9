@@ -24,6 +24,7 @@ on:
       - '!**.md'
       - 'README.md'
       - 'LICENSES.md'
+      - 'docs/guide.md'
       - 'third-party/**'
   workflow_dispatch:
     inputs:
@@ -75,7 +76,8 @@ jobs:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
-      # A PR that changes only Markdown (not README.md, LICENSES.md or third-party/, which tests read) skips the heavy jobs.
+      # A PR that changes only Markdown (not README.md, LICENSES.md, docs/guide.md or third-party/, which tests read) skips the heavy jobs.
+      # (docs/guide.md: Settings links to its headings, test/settings-pages.test.mjs; contracts.md is read by quick's own acp-contract.)
       # On a PR, HEAD is GitHub's merge of the branch into main and HEAD^1 is main, so the diff is the PR's own change.
       - id: changed
         env:
@@ -85,7 +87,7 @@ jobs:
           if [ "$EVENT" = pull_request ]; then
             # --no-renames: a code file renamed to .md lists its old name too, so it is not read as Markdown-only (#574 review).
             files=$(git diff --name-only --no-renames HEAD^1 HEAD)
-            if [ -n "$files" ] && ! grep -qv '\.md$' <<<"$files" && ! grep -qE '^(README\.md|LICENSES\.md|third-party/)' <<<"$files"; then heavy=false; fi
+            if [ -n "$files" ] && ! grep -qv '\.md$' <<<"$files" && ! grep -qE '^(README\.md|LICENSES\.md|docs/guide\.md|third-party/)' <<<"$files"; then heavy=false; fi
           fi
           echo "heavy=$heavy" >> "$GITHUB_OUTPUT"; echo "heavy jobs: $heavy"
       - uses: pnpm/action-setup@v6
@@ -108,15 +110,18 @@ jobs:
       - name: Scan
         if: ${{ !cancelled() }}
         run: node scripts/scan.mjs
+      # The shards' reporters: spec for people, test/file-limit.mjs's P9_PASS lines for the sprint gate (#574 r1: without
+      # them a plan row naming one of these tests could never pass scripts/green-check.mjs).
       - name: Convention tests
         if: ${{ !cancelled() }}
-        run: node scripts/with-tmp.mjs node --test --test-timeout=120000 --test-force-exit $(node test/shard.mjs quick)
+        run: node scripts/with-tmp.mjs node --test --test-timeout=120000 --test-force-exit --test-reporter=spec --test-reporter-destination=stdout --test-reporter=./test/file-limit.mjs --test-reporter-destination=stderr $(node test/shard.mjs quick)
 
   linux:
     # On a push the inputs are empty: !inputs.bare is !null, true, so the tests run as before. C2/C3: after quick passes,
     # when the change needs it, and not on a draft PR (on a push github.event.pull_request is null, so !draft is true).
+    # A run by hand naming files runs them whatever quick says (#574 r1: a red quick must not hide the test being diagnosed).
     needs: quick
-    if: ${{ !inputs.bare && !inputs.windows && needs.quick.outputs.heavy == 'true' && !github.event.pull_request.draft }}
+    if: ${{ !cancelled() && !inputs.bare && !inputs.windows && (inputs.files != '' && inputs.files != null || needs.quick.result == 'success' && needs.quick.outputs.heavy == 'true' && !github.event.pull_request.draft) }}
     strategy:
       # One shard failing still finishes the others, so a red run names every failing file.
       fail-fast: false
@@ -235,7 +240,7 @@ jobs:
   # (test/quarantine.json; the Linux shards skip it). Windows has its own fixed list here and no quarantine yet. Never retried.
   windows:
     needs: quick
-    if: ${{ !inputs.bare && (!inputs.files || inputs.windows) && needs.quick.outputs.heavy == 'true' && !github.event.pull_request.draft }}
+    if: ${{ !cancelled() && !inputs.bare && (!inputs.files || inputs.windows) && (inputs.windows || needs.quick.result == 'success' && needs.quick.outputs.heavy == 'true' && !github.event.pull_request.draft) }}
     strategy:
       fail-fast: false
       matrix:

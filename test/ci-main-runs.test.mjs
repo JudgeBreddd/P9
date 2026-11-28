@@ -54,7 +54,14 @@ test('C3: every PR runs Tests (no paths filter), a draft runs only quick, and ma
     assert.ok(body.some((line) => line.trim() === 'needs: quick'), `${job} waits for quick`);
     const cond = body.find((line) => line.trim().startsWith('if:'));
     assert.match(cond, /needs\.quick\.outputs\.heavy == 'true' && !github\.event\.pull_request\.draft/, `${job}: ${cond}`);
+    // #574 r1 blocker 4: a run by hand naming files (Linux) or asking for Windows runs whatever quick says, so a red quick
+    // cannot hide the test being diagnosed; every other run needs quick green (!cancelled() lets the condition decide).
+    assert.match(cond, /^\s*if: \$\{\{ !cancelled\(\) && /, `${job}: ${cond}`);
+    assert.match(cond, job === 'linux' ? /\(inputs\.files != '' && inputs\.files != null \|\| needs\.quick\.result == 'success' && / : /\(inputs\.windows \|\| needs\.quick\.result == 'success' && /, `${job}: ${cond}`);
   }
+  // #574 r1 blocker 2: quick's tests write the shards' P9_PASS lines, so a plan row naming one can pass the sprint gate.
+  const quick = block('quick', 2).join('\n');
+  assert.match(quick, /--test-reporter=\.\/test\/file-limit\.mjs --test-reporter-destination=stderr \$\(node test\/shard\.mjs quick\)/, quick);
   const [x, y] = [run('refs/pull/7/merge', 301), run('refs/pull/7/merge', 302)];
   assert.equal(x.cancel, 'true', 'a new push to a PR cancels the run it replaces');
   assert.equal(x.group, y.group);

@@ -40,13 +40,13 @@ const LOG = [
 
 function run({ plan = PLAN, runs = [{ id: 1, name: 'test', status: 'completed', conclusion: 'success' }],
   jobs = [{ id: 11, name: 'ubuntu', conclusion: 'success' }, { id: 12, name: 'windows', conclusion: 'skipped' }],
-  logs = { 11: LOG }, runsTotal, jobsTotal, fail = null, args, stdin } = {}) {
+  logs = { 11: LOG }, jobsOf = {}, runsTotal, jobsTotal, fail = null, args, stdin } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'green-check-'));
   try {
     writeFileSync(join(dir, 'gh'), FAKE_GH); chmodSync(join(dir, 'gh'), 0o755);
     writeFileSync(join(dir, 'sprint.md'), plan);
     writeFileSync(join(dir, 'runs.json'), JSON.stringify({ total_count: runsTotal ?? runs.length, workflow_runs: runs }));
-    for (const r of runs) writeFileSync(join(dir, `jobs-${r.id}.json`), JSON.stringify({ total_count: jobsTotal ?? jobs.length, jobs }));
+    for (const r of runs) { const j = jobsOf[r.id] ?? jobs; writeFileSync(join(dir, `jobs-${r.id}.json`), JSON.stringify({ total_count: jobsTotal ?? j.length, jobs: j })); }
     for (const [id, text] of Object.entries(logs)) writeFileSync(join(dir, `log-${id}.txt`), text);
     if (fail) writeFileSync(join(dir, 'fail'), fail);
     const argv = args ?? ['--item', 'O7', '--commit', SHA, '--repo', 'o/r', '--plan', join(dir, 'sprint.md')];
@@ -147,4 +147,20 @@ test('green check ignores the advisory quarantine job: its pass is not a second 
   assert.equal(again.status, 0, again.out);
   const red = run({ jobs, logs: { 11: LOG, 13: '2026-11-20T10:00:02.0000000Z   ✖ alpha works (3ms)' } });
   assert.equal(red.status, 0, red.out);
+});
+
+// C3 (O288), #574 round 1 blocker 1: marking a draft ready while its run is going cancels that run and starts another on the
+// same commit, and reopening a green PR runs it again. The gate reads only each workflow's newest run on the commit.
+test('green check reads only the newest run of each workflow on the commit: a cancelled draft run, then a green one', () => {
+  const runs = [{ id: 1, name: 'Tests', workflow_id: 7, status: 'completed', conclusion: 'cancelled' },
+    { id: 2, name: 'Tests', workflow_id: 7, status: 'completed', conclusion: 'success' }];
+  const jobsOf = { 1: [{ id: 11, name: 'quick', conclusion: 'cancelled' }], 2: [{ id: 21, name: 'linux (0)', conclusion: 'success' }] };
+  const after = run({ runs, jobsOf, logs: { 21: LOG } });
+  assert.equal(after.status, 0, after.out);
+  // A reopened green PR: two green runs, each with the same lines, still one passed line per test.
+  const twice = run({ runs: runs.map((r) => ({ ...r, conclusion: 'success' })), jobsOf: { 1: [{ id: 11, name: 'linux (0)', conclusion: 'success' }], 2: jobsOf[2] }, logs: { 11: LOG, 21: LOG } });
+  assert.equal(twice.status, 0, twice.out);
+  // The newest decides: a red run after a green one refuses, and another workflow's run still counts.
+  refused(run({ runs: [{ ...runs[1], id: 1 }, { ...runs[0], id: 2 }], jobsOf: { 1: jobsOf[2], 2: jobsOf[1] }, logs: { 21: LOG } }), 'is not green (Tests cancelled)');
+  refused(run({ runs: [...runs, { id: 3, name: 'Pull request checks', workflow_id: 8, status: 'completed', conclusion: 'failure' }], jobsOf: { ...jobsOf, 3: [] }, logs: { 21: LOG } }), 'is not green (Pull request checks failure)');
 });

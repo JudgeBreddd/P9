@@ -77,7 +77,14 @@ async function main() {
   const page = (route, key) => { const r = json(route), list = r[key] ?? [];
     if ((r.total_count ?? 0) > list.length) refuse(`item ${item}: ${route.split('?')[0]} has ${r.total_count} ${key}, more than one page of ${list.length}`);
     return list; };
-  const runs = page(`repos/${repo}/actions/runs?head_sha=${commit}&per_page=100`, 'workflow_runs');
+  // C3 (O288), #574 r1: only each workflow's newest run on the commit counts. Marking a draft ready cancels its run and
+  // starts another; reopening a PR runs it again. Run ids only grow, and a re-run keeps its id and shows its latest attempt.
+  const newest = new Map();
+  for (const r of page(`repos/${repo}/actions/runs?head_sha=${commit}&per_page=100`, 'workflow_runs')) {
+    const key = r.workflow_id ?? r.name;
+    if (!newest.has(key) || newest.get(key).id < r.id) newest.set(key, r);
+  }
+  const runs = [...newest.values()];
   if (!runs.length) refuse(`item ${item}: no CI run on ${commit.slice(0, 8)}`);
   const open = runs.filter((r) => r.status !== 'completed'), red = runs.filter((r) => r.status === 'completed' && r.conclusion !== 'success');
   if (open.length) refuse(`item ${item}: CI on ${commit.slice(0, 8)} is not complete (${open.map((r) => r.name).join(', ')})`);
