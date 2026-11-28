@@ -17,8 +17,9 @@ const call = (instance, route, method = 'GET', body) => http({ socketPath: insta
 const g = (cwd, ...args) => execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@example.com', ...args], { cwd, encoding: 'utf8' }).trim();
 const rows = async (instance) => (await call(instance, '/chat')).body.conversations;
 async function attach(t, instance, conversation) {
-  const events = (await call(instance, `/chat/events?after=0&only=${conversation}`)).body.events;
-  const hit = events.find((e) => e.data?.content?.text?.startsWith('mcp:'));
+  // The fake agent's mcp: reply can come after its chat starts: wait for it (as sprint-hooks does), do not read once (O277).
+  let hit;
+  for (let i = 0; i < 150 && !hit; i += 1) { hit = (await call(instance, `/chat/events?after=0&only=${conversation}`)).body.events.find((e) => e.data?.content?.text?.startsWith('mcp:')); if (!hit) await new Promise((r) => setTimeout(r, 200)); }
   assert.ok(hit, 'no mcp reply from ' + conversation);
   const [entry] = JSON.parse(hit.data.content.text.slice(4));
   const client = new Client({ name: 'p9-test', version: '1' });
@@ -35,7 +36,9 @@ test('O164 done means merged: the worker\'s ring counts a merged item only — a
   // P9 learns Claude's model and effort lists when it first runs: one chat before the press.
   const first = (await call(instance, '/chat', 'POST', { provider: 'claude' })).body.conversation;
   await call(instance, `/chat/${first}/prompt`, 'POST', { text: 'config' });
-  for (let i = 0; i < 100; i += 1) { if ((await call(instance, `/chat/events?after=0&only=${first}`)).body.events.some((e) => e.data?.content?.text?.startsWith('config:'))) break; await new Promise((r) => setTimeout(r, 200)); }
+  let configured = false;
+  for (let i = 0; i < 100 && !configured; i += 1) { configured = (await call(instance, `/chat/events?after=0&only=${first}`)).body.events.some((e) => e.data?.content?.text?.startsWith('config:')); if (!configured) await new Promise((r) => setTimeout(r, 200)); }
+  assert.ok(configured, 'no config reply from the first chat: Start would not know the model lists');
 
   // A repository with a real remote, as a hosted one: the sprint's clone fetches its main line from it.
   const repo = path.join(ws, 'repo'), remote = path.join(ws, 'remote.git');
