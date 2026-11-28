@@ -919,3 +919,95 @@ test('O268: the editor terminal uses the page renderer at its font size when Web
   await shot(dev, 'o268-terminal');
   assert.deepEqual(online(errors), []);
 }));
+
+// O294: Dev Focus has an editor area only while a tab is open. A file: the file list and the editor. A file and the chat:
+// both, and the chat. The chat and no file: the file list and the chat, no editor area between them. Nothing: the editor's own
+// empty page. The first check after the last tab closes pins the workbench internals the build leans on (apps/dev/client.js).
+test('O294: no editor tab and the chat beside: the file list and the chat, no editor area; the divider sizes the list; Ctrl+B, the palette and a shell reload work; a file brings the editor back', { skip: process.platform !== 'linux', timeout: 360000 }, logged(async t => {
+  const editor = await editorFor();
+  if (!editor) return t.skip('needs the editor server (P9_EDITOR_HOST, or the fixtures reh.tar.gz)');
+  const { instance, app, shell, dev, errors } = await openDevFocus(t, editor, {});
+  await writeFile(path.join(instance.workspace, 'note.txt'), 'note\n');
+  // What shows: the editor page's parts (0 when hidden), the view's place in the window (main), the shell's panel and tab.
+  const read = async () => ({
+    ...await dev.evaluate(() => {
+      const w = sel => { const el = document.querySelector(sel); return el && el.offsetParent !== null ? Math.round(el.getBoundingClientRect().width) : 0; };
+      return { page: innerWidth, strip: w('.part.activitybar'), list: w('.part.sidebar'), editor: w('.part.editor'), tabs: window.devFocus.v.window.tabGroups.all.reduce((n, g) => n + g.tabs.length, 0) };
+    }),
+    view: await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].contentView.children.find(c => c.webContents?.getURL().startsWith('p9://dev/'))?.getBounds()),
+    ...await shell.evaluate(() => { const side = document.querySelector('#side'), s = side.getBoundingClientRect(); return { chat: side.hidden ? 0 : Math.round(s.width), chatLeft: Math.round(s.left), stage: document.querySelector('.stage').clientWidth, tab: document.querySelector('#devTab .stab').textContent }; }),
+  });
+  const until = async (what, ok) => { let got; for (let i = 0; i < 60; i++) { got = await read(); if (ok(got)) { await sleep(600); got = await read(); if (ok(got)) { console.log('NOTE ' + what + ': ' + JSON.stringify(got)); return got; } } await sleep(250); } assert.fail(what + ': ' + JSON.stringify(got)); };
+  // What the owner sees: the editor view drawn into the shell's picture where main places it.
+  const seen = async name => {
+    const { view } = await read(), src = (await dev.screenshot({ type: 'jpeg', quality: 80 })).toString('base64');
+    await shell.evaluate(({ at, src }) => { const img = Object.assign(document.createElement('img'), { id: 'o294paste', src: 'data:image/jpeg;base64,' + src }); Object.assign(img.style, { position: 'fixed', left: at.x + 'px', top: at.y + 'px', width: at.width + 'px', height: at.height + 'px', zIndex: 99999 }); document.body.append(img); return img.decode(); }, { at: view, src });
+    await shot(shell, name);
+    await shell.evaluate(() => document.querySelector('#o294paste').remove());
+  };
+  const closeAll = () => dev.evaluate(() => window.devFocus.v.commands.executeCommand('workbench.action.closeAllEditors'));
+  const filesOnly = got => got.tabs === 0 && got.editor === 0 && got.list > 0 && got.tab === 'Files' && got.page === got.strip + got.list && got.view.width === got.page;
+  const whole = got => got.editor >= 220 && got.tab === 'Editor';
+  // 1. Nothing open, the chat off: the editor's own empty page, as before.
+  let got = await until('nothing open', g => g.tabs === 0 && g.chat === 0 && whole(g) && g.list > 0);
+  await seen('o294-1-nothing-open');
+  // 2. A file. 3. A file and the chat.
+  await dev.evaluate(() => window.devFocus.open('note.txt'));
+  await until('a file', g => g.tabs === 1 && whole(g));
+  await seen('o294-2-file');
+  await shell.click('#sideToggle');
+  const split = await until('a file and the chat', g => g.tabs === 1 && g.chat > 0 && whole(g));
+  await seen('o294-3-file-chat');
+  // 4. The chat and no file: the list keeps its width, the chat takes the rest, and the editor area is 0 px wide.
+  await closeAll();
+  got = await until('the chat, no file', filesOnly);
+  assert.equal(got.list, split.list, 'the file list keeps its width');
+  assert.equal(got.chat, got.stage - 8 - got.view.width, 'the chat takes the rest');
+  assert.equal(await dev.evaluate(() => window.devFocus.layout.getSize('workbench.parts.editor').width), 0, 'the workbench itself has the editor area at 0');
+  await seen('o294-4-chat-no-file');
+  // The divider sizes the file list, both ways (it starts on the chat's left edge).
+  const drag = async by => { const b = await shell.locator('#side .handle-v').boundingBox(), x = b.x + b.width / 2, y = b.y + b.height / 2; await shell.mouse.move(x, y); await shell.mouse.down(); await shell.mouse.move(x + by / 2, y, { steps: 4 }); await shell.mouse.move(x + by, y, { steps: 4 }); await shell.mouse.up(); };
+  const start = got.list;
+  await drag(100);
+  got = await until('dragged wider', g => filesOnly(g) && g.list === start + 100);
+  await seen('o294-5-wider');
+  await drag(-160);
+  got = await until('dragged narrower', g => filesOnly(g) && g.list === start - 60);
+  await drag(-2000);
+  got = await until('dragged to the narrowest', g => filesOnly(g) && g.list === 170);
+  await drag(start - 170);
+  got = await until('dragged back', g => filesOnly(g) && g.list === start);
+  // Ctrl+B hides the file list (the icon strip stays, the chat takes the rest) and shows it again at its width.
+  await dev.evaluate(() => window.devFocus.v.commands.executeCommand('workbench.files.action.focusFilesExplorer'));
+  await dev.keyboard.press('Control+b');
+  got = await until('the list hidden', g => g.list === 0 && g.editor === 0 && g.view.width === g.strip && g.chat === g.stage - 8 - g.strip && g.tab === 'Files');
+  await seen('o294-6-list-hidden');
+  await dev.keyboard.press('Control+b');
+  got = await until('the list shown again', g => filesOnly(g) && g.list === start);
+  // The command palette opens inside the view.
+  await dev.keyboard.press('F1');
+  await dev.waitForFunction(() => document.querySelector('.quick-input-widget')?.offsetParent, null, { timeout: 15000 });
+  await sleep(500);
+  const box = await dev.evaluate(() => { const r = document.querySelector('.quick-input-widget').getBoundingClientRect(); return { left: Math.round(r.left), right: Math.round(r.right), page: innerWidth }; });
+  await seen('o294-7-palette');
+  assert.ok(box.left >= 0 && box.right <= box.page && box.right - box.left >= 200, 'the palette is inside the view: ' + JSON.stringify(box));
+  await dev.keyboard.press('Escape');
+  // A reloaded shell learns what the editor shows from main: still the file list and the chat.
+  await shell.reload();
+  await shellReady(shell);
+  got = await until('after a shell reload', g => filesOnly(g) && g.list === start && g.chat > 0);
+  // A file from the list brings the editor area back beside the same file list, the 220 px minimum with it.
+  await dev.locator('.explorer-folders-view .monaco-list-row', { hasText: 'note.txt' }).first().dblclick();
+  got = await until('a file again', g => g.tabs === 1 && g.chat > 0 && whole(g) && g.list === start && g.editor === split.editor);
+  assert.equal(await dev.evaluate(() => window.devFocus.layout.getSize('workbench.parts.editor').width >= 220 && !document.body.classList.contains('p9-files')), true);
+  await seen('o294-8-file-again');
+  // The last tab closed with the chat off: the whole view, the editor's empty page.
+  await shell.click('#sideToggle');
+  await until('the chat off', g => g.chat === 0 && whole(g));
+  await closeAll();
+  got = await until('nothing open again', g => g.tabs === 0 && g.chat === 0 && whole(g) && g.list === start);
+  // And the chat turned on with nothing open goes straight to the file list and the chat.
+  await shell.click('#sideToggle');
+  await until('the chat on, nothing open', g => filesOnly(g) && g.list === start && g.chat > 0);
+  assert.deepEqual(online(errors), []);
+}));
