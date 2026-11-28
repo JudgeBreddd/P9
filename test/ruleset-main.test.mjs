@@ -44,7 +44,9 @@ test('each required check from Actions is a job that reports on every pull reque
   assert.equal(named('pull_request'), 'tests');
   assert.notEqual(named('workflow_dispatch'), 'tests', 'a run by hand never reports as tests');
   // It waits for every job a pull request runs; the rest run by hand only.
-  const onPr = Object.keys(jobs).filter((j) => j !== 'tests' && field(j, 'if') !== '${{ inputs.bare }}');
+  // #577 r1 #3 (O293): except the quarantine job, which never blocks, so tests does not wait for it.
+  assert.equal(field('quarantine', 'continue-on-error'), 'true');
+  const onPr = Object.keys(jobs).filter((j) => !['tests', 'quarantine'].includes(j) && field(j, 'if') !== '${{ inputs.bare }}');
   assert.deepEqual(field('tests', 'needs').replace(/[[\]\s]/g, '').split(',').sort(), onPr.sort());
 });
 

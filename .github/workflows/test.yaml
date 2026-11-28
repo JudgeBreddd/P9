@@ -127,16 +127,14 @@ jobs:
       # One shard failing still finishes the others, so a red run names every failing file.
       fail-fast: false
       matrix:
-        # files (dispatch) runs just those files, on one runner. C1 (O286): "quarantine" runs test/quarantine.json's tests
-        # and shell-bundle's warm-usable timing (P9_TIMED), prints pass or fail for each, and never blocks.
-        shard: ${{ fromJSON(inputs.files && '[0]' || '[0, 1, 2, 3, 4, 5, 6, "quarantine"]') }}
+        # files (dispatch) runs just those files, on one runner. The quarantine shard is the job below.
+        shard: ${{ fromJSON(inputs.files && '[0]' || '[0, 1, 2, 3, 4, 5, 6]') }}
     runs-on: ubuntu-26.04
-    continue-on-error: ${{ matrix.shard == 'quarantine' }}
     timeout-minutes: 30
-    env:
+    env: &linux-env
       GITLEAKS: 8.30.1
       GITLEAKS_SHA256: 551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
-    steps:
+    steps: &linux-steps
       - uses: actions/checkout@v7
       - uses: pnpm/action-setup@v6
       - uses: actions/setup-node@v7
@@ -234,6 +232,22 @@ jobs:
           path: ${{ runner.temp }}/evidence
           retention-days: 7
           if-no-files-found: warn
+
+  # C1 (O286): runs test/quarantine.json's tests and shell-bundle's warm-usable timing (P9_TIMED), prints pass or fail for
+  # each, and never blocks. #577 r1 #3 (O293): its own job, not a leg of linux, so `tests` (which needs linux) never waits
+  # for it; the linux job's env and steps (YAML anchors), with a one-entry matrix so matrix.shard reads quarantine.
+  quarantine:
+    name: linux (quarantine)
+    needs: quick
+    if: ${{ !cancelled() && !inputs.bare && !inputs.windows && !inputs.files && needs.quick.result == 'success' && needs.quick.outputs.heavy == 'true' && !github.event.pull_request.draft }}
+    strategy:
+      matrix:
+        shard: [quarantine]
+    runs-on: ubuntu-26.04
+    continue-on-error: true
+    timeout-minutes: 30
+    env: *linux-env
+    steps: *linux-steps
 
   # The Windows-only tests on a real Windows machine of each architecture, no installer build (0.1.8 F1: they ran inside
   # windows-installer.yaml's installer job until installers moved to tags). The host (.cmd through cmd.exe, a new console,
