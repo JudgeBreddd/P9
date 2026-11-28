@@ -323,6 +323,9 @@ function devFilesSaid(state) {
   if (state && side.current()) side.apply();
 }
 window.p9?.onDevFiles?.(devFilesSaid);
+// The real editor is a view laid over this pane, 8 px short of the side panel. The sample explorer and editor under it are not
+// drawn in the desktop: the sample's "Open a file from the explorer." showed through that gap beside the file list (O294).
+if (window.p9?.devView) $('#fDev').dataset.real = '';
 if (sampleView) window.__side = side; // ponytail: the UI test's door to the panel (sample data is handed in only by tests, never in a packaged build)
 // Item 19 (threat model row 65): an artifact (artifact.mjs) in the side panel's 'artifact' slot, in the mode the agent
 // picked; its chip in the chat reopens it. Answer 2 in specs/side-panel.md: in Dev Focus with the chat beside the
