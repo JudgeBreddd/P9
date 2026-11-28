@@ -38,7 +38,7 @@ const ALLOW = {
 // count two). No word rule tells the poem from the model ("write a sonnet" counts): a string that is not a model raises its
 // file's number below, with a comment saying so, in review.
 const NAME = /\bgpt-\d|\b(?:opus|sonnet|haiku|fable)\b/gi;
-// Only what can be read exactly: code through the TypeScript parser and JSON through JSON.parse. Shell, PowerShell, HTML, CSS
+// Only what can be read exactly: code through the TypeScript parser and JSON through its scanner. Shell, PowerShell, HTML, CSS
 // and YAML are not read; on 2026-11-28 none of them held a model name outside a comment.
 const CODE = /\.(?:mjs|cjs|js|jsx|mts|cts|ts|tsx)$/, JSON_FILE = /\.jsonl?$/;
 // Files with no name in their raw text are not parsed; a \u escape could spell one, so those are parsed too.
@@ -56,17 +56,11 @@ function codeStrings(file, text) {
   visit(ts.createSourceFile(file, text, ts.ScriptTarget.Latest, false));
   return out;
 }
-// The keys and string values of a JSON file: one document, or else one record per line (JSONL, or a .json written that way).
-function jsonStrings(file, text) {
-  let records;
-  try { records = file.endsWith('.jsonl') ? null : [JSON.parse(text)]; } catch { records = null; }
-  records ??= text.split('\n').filter((line) => line.trim()).map((line) => JSON.parse(line));
-  const out = [];
-  const walk = (v) => {
-    if (typeof v === 'string') out.push(v);
-    else if (v && typeof v === 'object') for (const [k, x] of Object.entries(v)) { if (!Array.isArray(v)) out.push(k); walk(x); }
-  };
-  records.forEach(walk);
+// The keys and string values of a JSON file, as the string tokens TypeScript's scanner reads (escapes decoded). It never
+// throws: a BOM is whitespace, JSONL is just more tokens, and a broken fixture still has its names counted by file.
+function jsonStrings(text) {
+  const out = [], scan = ts.createScanner(ts.ScriptTarget.Latest, false, ts.LanguageVariant.Standard, text);
+  for (let t = scan.scan(); t !== ts.SyntaxKind.EndOfFileToken; t = scan.scan()) if (t === ts.SyntaxKind.StringLiteral) out.push(scan.getTokenValue());
   return out;
 }
 
@@ -77,7 +71,7 @@ export function modelCounts(files, read) {
       || file.split('/').some((part) => part === 'dist' || part === 'node_modules')) continue;
     const text = read(file);
     if (!MAYBE.test(text)) continue;
-    const n = (CODE.test(file) ? codeStrings(file, text) : jsonStrings(file, text)).reduce((sum, x) => sum + (x.match(NAME)?.length ?? 0), 0);
+    const n = (CODE.test(file) ? codeStrings(file, text) : jsonStrings(text)).reduce((sum, x) => sum + (x.match(NAME)?.length ?? 0), 0);
     if (n) counts[file] = n;
   }
   return counts;
@@ -151,4 +145,13 @@ test('R8 review r2: a name after an article, a second name in one string, JSONL 
 test('R8 review r2: only code and JSON are read; a shell, CSS or HTML file is out of scope', () => {
   const text = { 'scripts/x.sh': 'MODEL="claude-opus-5-5" # fable', 'apps/web/src/s.css': '.status-opus { }', 'apps/web/a.html': '<b>Opus</b>' };
   assert.deepEqual(modelCounts(Object.keys(text), (f) => text[f]), {});
+});
+
+test('R8 review r3: a BOM or a broken JSON fixture does not crash the check; its names still count', () => {
+  const text = {
+    'test/fixtures/bom.json': '﻿{"space":"\\u00a0"}',
+    'test/fixtures/bom-name.json': '﻿{"model":"opus"}',
+    'test/fixtures/broken.json': '{"model": "sonnet",,, "x": ',
+  };
+  assert.deepEqual(modelCounts(Object.keys(text), (f) => text[f]), { 'test/fixtures/bom-name.json': 1, 'test/fixtures/broken.json': 1 });
 });
