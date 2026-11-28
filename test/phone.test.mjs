@@ -380,17 +380,18 @@ test('Phase 11: phone editor, offline cursor replay, operation retry and usage s
     ids.push(route.request().headers()['x-p9-op']);
     if (!aborted) { aborted = true; await route.abort(); } else await route.continue();
   });
-  await page.click('#save'); await page.waitForTimeout(100);
-  await page.click('#save'); await page.waitForSelector('#fileState:text("Conflict")');
+  // #581 CI (O293): #fileState still says Conflict from the draft above, so wait for the requests themselves, not the text.
+  const failed = () => page.waitForEvent('requestfailed', (r) => r.url().endsWith('/files'));
+  await Promise.all([failed(), page.click('#save')]);
+  await Promise.all([page.waitForResponse((r) => r.url().endsWith('/files') && r.status() === 409), page.click('#save')]);
+  await page.waitForSelector('#fileState:text("Conflict")');
   assert.equal(ids.length, 2); assert.equal(ids[0], ids[1]);
   await page.unroute('**/files');
 
   // Release r2 R2-5: two lost saves, then a retry of the first, keeps the first one's ID.
   const lost = [];
   await page.route('**/files', async (route) => { lost.push(route.request().headers()['x-p9-op']); await route.abort(); });
-  await edit('lost A'); await page.click('#save'); await page.waitForTimeout(100);
-  await edit('lost B'); await page.click('#save'); await page.waitForTimeout(100);
-  await edit('lost A'); await page.click('#save'); await page.waitForTimeout(100);
+  for (const text of ['lost A', 'lost B', 'lost A']) { await edit(text); await Promise.all([failed(), page.click('#save')]); }
   await page.unroute('**/files');
   assert.equal(lost.length, 3); assert.notEqual(lost[0], lost[1]); assert.equal(lost[2], lost[0], 'the retried save kept its ID (R2-5)');
 

@@ -220,14 +220,17 @@ test('Phase 8: Dev Focus edits real files through the guarded save', { skip, tim
   await dev.waitForFunction(() => window.devFocusReady || document.querySelector('#status')?.textContent, null, { timeout: 120000 });
   assert.equal(await dev.locator('#status').textContent(), '');
   stage('const config = await dev.evalu'); // The view sits exactly over the shell's Dev pane (Playwright screenshots one WebContents, so this is the overlay's proof).
-  // It draws above the shell, so it leaves the cards' column free and hides while a dialog is open (the chat toast was missing in Dev).
+  // It draws above the shell and hides while a dialog is open (the chat toast was missing in Dev). Since 0.1.6 the cards float
+  // over it in their own overlay view, drawn after it, so the editor runs the pane's full width (O293).
   const pane = await shell.evaluate(() => { const r = document.querySelector('#fDev').getBoundingClientRect(), c = document.querySelector('#cards').getBoundingClientRect();
     return { x: Math.round(r.x), y: Math.round(r.y), height: Math.round(r.height), cardsLeft: c.height > 0 ? Math.round(c.left) : null, right: Math.round(r.right) }; });
   const devBounds = () => app.evaluate(({ BrowserWindow }) => { const child = BrowserWindow.getAllWindows()[0].contentView.children[0]; return { bounds: child.getBounds(), visible: child.getVisible() }; });
   const view = await devBounds();
   assert.ok(pane.cardsLeft !== null, 'the test profile shows cards (Set up)');
   assert.deepEqual({ x: view.bounds.x, y: view.bounds.y, height: view.bounds.height, visible: view.visible }, { x: pane.x, y: pane.y, height: pane.height, visible: true });
-  assert.ok(view.bounds.x + view.bounds.width <= pane.cardsLeft && view.bounds.x + view.bounds.width > pane.right - 400, 'editor stops short of the cards: ' + JSON.stringify({ view, pane }));
+  assert.equal(view.bounds.x + view.bounds.width, pane.right, 'the editor runs to the pane\'s right edge: ' + JSON.stringify({ view, pane }));
+  const overlay = await app.evaluate(({ BrowserWindow }) => { const c = BrowserWindow.getAllWindows()[0].contentView.children[1]; return c && { x: c.getBounds().x, visible: c.getVisible() }; });
+  assert.deepEqual(overlay, { x: pane.cardsLeft, visible: true }, 'the cards overlay shows above the editor, at the cards\' column');
   await shell.locator('#setBtn').click();
   await shell.waitForFunction(() => document.querySelector('#setDlg').open);
   await new Promise(resolve => setTimeout(resolve, 300));
@@ -380,11 +383,14 @@ test('Phase 8: Dev Focus edits real files through the guarded save', { skip, tim
   // Nor does a read while the buffer is clean but stale (a same-size, same-mtime disk change VS Code's watcher cannot see):
   // the save basis is the text the editor shows, so an edit made on it is refused.
   const stale = path.join(instance.workspace, 'stale.txt');
+  // A whole-second time put back exactly: restoring a stat's Date drops the sub-millisecond part, the editor then sees the
+  // change and reloads the clean buffer, and the save after it is rightly allowed (failed once on CI, #583).
+  const when = new Date('2026-01-01T00:00:00Z');
   await writeFile(stale, 'disk version 1\n');
+  await utimes(stale, when, when);
   await dev.evaluate(() => window.devFocus.open('stale.txt'));
-  const staleBefore = await stat(stale);
   await writeFile(stale, 'other writer!!\n');
-  await utimes(stale, staleBefore.atime, staleBefore.mtime);
+  await utimes(stale, when, when);
   const stale4 = await dev.evaluate(async () => {
     const { v } = window.devFocus, editor = v.window.activeTextEditor, document = editor.document;
     await v.workspace.fs.readFile(document.uri);
@@ -603,7 +609,7 @@ test('Dev Focus: Open Folder inside and outside the workspace', { skip, timeout:
   // Inside the workspace: File > Open Folder (the workbench's own command) opens it at once, with no question.
   await pick(path.join(instance.workspace, 'src'));
   page = nextPage();
-  await dev.evaluate(() => window.devFocus.v.commands.executeCommand('workbench.action.files.openFolder'));
+  await dev.evaluate(() => { window.devFocus.v.commands.executeCommand('workbench.action.files.openFolder'); }); // not awaited there: the open replaces this page, and an evaluate still waiting on it fails (O293)
   dev = await ready(await page);
   assert.deepEqual(await asked(), []);
   let config = await dev.evaluate(() => window.p9dev.config());
@@ -616,7 +622,7 @@ test('Dev Focus: Open Folder inside and outside the workspace', { skip, timeout:
   // Outside: one question naming the folder, then the editor shows it and saves land there, not in the workspace.
   await pick(outside);
   page = nextPage();
-  await dev.evaluate(() => window.devFocus.v.commands.executeCommand('workbench.action.files.openFolder'));
+  await dev.evaluate(() => { window.devFocus.v.commands.executeCommand('workbench.action.files.openFolder'); }); // not awaited there: the open replaces this page, and an evaluate still waiting on it fails (O293)
   dev = await ready(await page);
   assert.deepEqual(await asked(), ['Open ' + outside + ' in Dev Focus?']);
   config = await dev.evaluate(() => window.p9dev.config());
@@ -633,7 +639,7 @@ test('Dev Focus: Open Folder inside and outside the workspace', { skip, timeout:
 
   // A folder that holds the workspace is refused, and the open folder stays.
   await pick(instance.directory);
-  assert.deepEqual(await dev.evaluate(() => window.p9dev.openFolder()), { error: 'root-refused' });
+  assert.deepEqual(await dev.evaluate(() => window.p9dev.openFolder()), { error: 'root-refused', server: false }); // server: the refusal says whose rules refused (#468)
   assert.equal((await dev.evaluate(() => window.p9dev.config())).folder, outside);
 
   // p9 edit names a workspace file: Dev Focus goes back to the workspace and opens it there.
@@ -798,20 +804,25 @@ test('Event Horizon Azure: Dev Focus paints the review fixture in the theme; fen
     const { v } = window.devFocus, editor = v.window.visibleTextEditors.find(e => e.document.fileName.endsWith(name));
     const shown = await v.window.showTextDocument(editor.document, { viewColumn: editor.viewColumn, preserveFocus: false });
     // The token checks above scroll the file; an off-screen cursor is not drawn (width 0), so bring it back into view.
-    shown.revealRange(shown.selection, v.TextEditorRevealType.AtTop);
-    await new Promise(resolve => setTimeout(resolve, 400));
+    // O293: the editor draws it on a later frame; 400 ms was sometimes too soon on CI (width 0, display none). Up to 5 s.
+    const drawn = () => document.querySelector('.editor-group-container .monaco-editor.focused .cursor')?.getBoundingClientRect().width > 0;
+    shown.revealRange(shown.selection, v.TextEditorRevealType.AtTop); // once: a cursor that needs a second reveal fails (#583 r1)
+    let waited = 0;
+    for (; waited < 5000 && !drawn(); waited += 200) await new Promise(resolve => setTimeout(resolve, 200));
     const groups = [...document.querySelectorAll('.editor-group-container')], mine = groups.find(g => g.querySelector('.tab.active')?.textContent.includes(name)), other = groups.find(g => g !== mine);
-    const cursor = mine.querySelector('.cursor'), line = mine.querySelector('.tab.active > .tab-border-top-container');
+    // The focused editor's own cursor: a group can hold other editors' hidden ones (O293: width 0 on CI).
+    const cursors = [...mine.querySelectorAll('.cursor')], cursor = mine.querySelector('.monaco-editor.focused .cursor') ?? cursors[0], line = mine.querySelector('.tab.active > .tab-border-top-container');
     return { lang: document.documentElement.dataset.lang, cursor: getComputedStyle(cursor).backgroundColor, width: cursor.getBoundingClientRect().width,
       border: getComputedStyle(mine).outlineColor, other: getComputedStyle(other).outlineColor, tab: getComputedStyle(line).backgroundColor, tabHeight: line.getBoundingClientRect().height,
-      focused: mine.contains(document.activeElement) };
+      focused: mine.contains(document.activeElement),
+      ...(cursor.getBoundingClientRect().width === 2 ? {} : { waited, cursors: cursors.map(c => ({ w: c.getBoundingClientRect().width, display: getComputedStyle(c).display, shown: getComputedStyle(c).visibility, style: c.getAttribute('style'), editor: c.closest('.monaco-editor')?.className })) }) };
   }, name);
   const inMd = await focus('README.md');
   await shot(dev, 'o17-dev-focus-markdown');
   const inTs = await focus('main.ts');
   await shot(dev, 'o17-dev-focus-code');
-  assert.deepEqual(inMd, { lang: 'markdown', cursor: RGB.violet, width: 2, border: RGB.violetDim, other: RGB.subtle, tab: RGB.violetDim, tabHeight: 2, focused: true });
-  assert.deepEqual(inTs, { lang: 'code', cursor: RGB.azure, width: 2, border: RGB.azureDim, other: RGB.subtle, tab: RGB.azureDim, tabHeight: 2, focused: true });
+  assert.deepEqual(inMd, { lang: 'markdown', cursor: RGB.violet, width: 2, border: RGB.violetDim, other: RGB.subtle, tab: RGB.violetDim, tabHeight: 2, focused: true }, JSON.stringify(inMd));
+  assert.deepEqual(inTs, { lang: 'code', cursor: RGB.azure, width: 2, border: RGB.azureDim, other: RGB.subtle, tab: RGB.azureDim, tabHeight: 2, focused: true }, JSON.stringify(inTs));
   // The other languages § 4 names: Python, JSON, CSS and shell.
   const opened = async (name, first) => {
     await dev.evaluate(name => window.devFocus.open(name), name);
@@ -995,6 +1006,10 @@ test('O294: no editor tab and the chat beside: the file list and the chat, no ed
   await seen('o294-7-palette');
   assert.ok(box.left >= 0 && box.right <= box.page && box.right - box.left >= 200, 'the palette is inside the view: ' + JSON.stringify(box));
   await dev.keyboard.press('Escape');
+  // #581 r2 (O293): leaving Dev Focus and coming back keeps the view's width to the pixel (it grew 2 to 6 px each time).
+  const kept = got.view.width;
+  await shell.keyboard.press('Control+1'); await sleep(300); await shell.keyboard.press('Control+2');
+  got = await until('after a focus round-trip', g => filesOnly(g) && g.list === start && g.view.width === kept);
   // A reloaded shell learns what the editor shows from main: still the file list and the chat.
   await shell.reload();
   await shellReady(shell);
@@ -1028,13 +1043,26 @@ test('O294: no editor tab and the chat beside: the file list and the chat, no ed
   await shell.click('#side [data-side-swap]');
   await until('both bars hidden, the chat on the right', g => bare(g) && g.chatLeft > g.view.x);
   await hide(false);
-  got = await until('the bars back', g => filesOnly(g) && g.chat > 0);
+  got = await until('the bars back', g => filesOnly(g) && g.chat > 0 && g.list === start + 50); // it came back 2 px narrower once (#583 r1)
   // The chat closed with no tab open: the view goes whole and the file list keeps its width.
   const wide = got.list;
   await shell.click('#sideToggle');
   await until('the chat off from the file list', g => g.tabs === 0 && g.chat === 0 && whole(g) && g.list === wide);
   await shell.click('#sideToggle');
   await until('the chat on again', g => filesOnly(g) && g.list === wide && g.chat > 0);
+  // The whole editor's own edge resizes the file list (the chat off): the chat back on keeps that width, not the old one (#583 r1).
+  await shell.click('#sideToggle');
+  await until('the chat off before the edge', g => g.tabs === 0 && g.chat === 0 && whole(g) && g.list === wide);
+  await dev.evaluate(px => { const { layout } = window.devFocus, h = layout.getSize('workbench.parts.sidebar').height; layout.setSize('workbench.parts.sidebar', { width: px, height: h }); }, wide + 40);
+  await until('the editor edge moved 40', g => g.tabs === 0 && g.chat === 0 && whole(g) && g.list === wide + 40);
+  await shell.click('#sideToggle');
+  await until('the chat on after the edge', g => filesOnly(g) && g.list === wide + 40 && g.chat > 0);
+  await shell.click('#sideToggle');
+  await until('the chat off, the edge back', g => g.chat === 0 && whole(g));
+  await dev.evaluate(px => { const { layout } = window.devFocus, h = layout.getSize('workbench.parts.sidebar').height; layout.setSize('workbench.parts.sidebar', { width: px, height: h }); }, wide);
+  await until('the editor edge back', g => g.tabs === 0 && g.chat === 0 && whole(g) && g.list === wide);
+  await shell.click('#sideToggle');
+  await until('the chat on, the old width', g => filesOnly(g) && g.list === wide && g.chat > 0);
   // Zoomed in (what Settings does to the shell and the editor page): the view's width in the window's pixels is no longer the
   // page's own width, and the file list still takes what the divider gives it (#581 r2). The keys move the divider 24 a press.
   const zoom = z => app.evaluate(({ webContents }, z) => { for (const w of webContents.getAllWebContents()) if (/^p9:\/\/(app|dev)\//.test(w.getURL())) w.setZoomFactor(z); }, z);
@@ -1048,7 +1076,12 @@ test('O294: no editor tab and the chat beside: the file list and the chat, no ed
     await until('zoom ' + z + ', the divider moved 48', g => near(g) && Math.abs(g.list - before - 48) <= 3 && Math.abs(g.view.width - g.page * z) <= 3);
     if (z > 1) await seen('o294-11-zoomed');
     await shell.keyboard.press('ArrowLeft'); await shell.keyboard.press('ArrowLeft');
-    await until('zoom ' + z + ', the divider back', g => near(g) && Math.abs(g.list - before) <= 3);
+    got = await until('zoom ' + z + ', the divider back', g => near(g) && Math.abs(g.list - before) <= 3);
+    // #581 r2 (O293): leaving Dev Focus and coming back keeps the view's width to the pixel (it grew 2 to 6 px each time).
+    const kept = got.view.width;
+    for (let i = 1; i <= 2; i++) { await shell.keyboard.press('Control+1'); await sleep(300); await shell.keyboard.press('Control+2'); await until('zoom ' + z + ', Dev Focus again ' + i, near); }
+    await sleep(1000);
+    assert.equal((await read()).view.width, kept, 'zoom ' + z + ': two focus round-trips keep the view width');
   }
   await zoom(1);
   await until('zoom 1 again', g => filesOnly(g) && g.chat > 0);
@@ -1065,7 +1098,7 @@ test('O294: no editor tab and the chat beside: the file list and the chat, no ed
     await dev.waitForFunction(() => window.devFocusReady, null, { timeout: 120000 });
     await until('rebuilt after crash ' + round, g => g.tabs === 0 && g.chat === 0 && whole(g));
     await shell.click('#sideToggle');
-    await until('the chat on after crash ' + round, g => filesOnly(g) && g.chat > 0);
+    await until('the chat on after crash ' + round, g => filesOnly(g) && g.chat > 0 && g.list === wide); // it came back 306 once (#583 r1)
   }
   // A restart (the same daemon and profile): a fresh editor page says what it shows, with a tab open and with none.
   await dev.evaluate(() => window.devFocus.open('note.txt'));

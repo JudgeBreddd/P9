@@ -2852,10 +2852,11 @@ async function openFile(path: string, root?: string) {
   if (!root && FILE_IMAGE.test(path)) return openImage(path);
   showImage(false);
   const mine = ++opening;
+  let opened: typeof state.file = null;
   try {
     const file = await request(root ? '/mission/notes/file?' + new URLSearchParams({ root, path }) : '/files?' + at(path));
     if (mine !== opening) return false; // a newer open started while this request was out: its file is the open one
-    const opened = state.file = { path, hash: file.hash, content: file.content, root, ...(!root && place && { place }), ...(file.readOnly && { readOnly: true }) };
+    opened = state.file = { path, hash: file.hash, content: file.content, root, ...(!root && place && { place }), ...(file.readOnly && { readOnly: true }) };
     await putText(file.content);
     // #578 r1, #580 r2: the file was closed or replaced, or a newer open started, while the editor loaded; no "Loaded"
     // for a file that is not the open one.
@@ -2863,13 +2864,17 @@ async function openFile(path: string, root?: string) {
     one('#openPath').textContent = path.split('/').pop()!; one<HTMLElement>('#openPath').title = path; one<HTMLElement>('#browser').hidden = true; one<HTMLElement>('#fileView').hidden = false;
     preview(!!root || /\.md$/i.test(path)); // O67: a Markdown file opens to read; Edit is in the bar's menu
     // review 3 L2: a _private note with File protection on reads, but its save would be refused
-    one('#fileState').textContent = opened.readOnly ? 'Read-only: File protection is on' : 'Loaded'; one<HTMLElement>('#conflict').hidden = true;
+    one('#fileState').textContent = opened!.readOnly ? 'Read-only: File protection is on' : 'Loaded'; one<HTMLElement>('#conflict').hidden = true;
     online(); syncSave();
     return true;
   } catch (error) {
     // #578 r2, #580 r1 (O293): the file changed while the editor loaded, or a newer open started while this one's request
     // was out (and it failed); the status belongs to the file now open, so leave it.
-    if ((error as Error).message === 'file-changed' || mine !== opening) return false;
+    if ((error as Error).message === 'file-changed' || mine !== opening) {
+      // #580 r3 (O293): a newer open (refused) or a Close came in while the editor loaded this one; it is not the open file.
+      if (mine !== opening && opened && state.file === opened) state.file = null;
+      return false;
+    }
     // Binary, oversize, symlinked or locked files are refused by the daemon (request-refused); say so instead of "Unavailable".
     one('#fileState').textContent = (error as Error).message === 'request-refused' ? 'Cannot open this file here' : 'File unavailable';
     return false;
