@@ -60,6 +60,8 @@ export const setProtection = (on) => { protect = on !== false; }; // anything bu
 export const protection = () => protect;
 const locked = (name) => protect && (/^(?:_private|\.git|secrets)$/i.test(name) || /^\.env/i.test(name) || /^\.p9-/i.test(name));
 export const lockedName = (name) => locked(name);
+// #579 r2 (O299): the writer's own path rules (partsFor), for a caller choosing a path before it writes one.
+export const pathAllowed = (relative) => { try { partsFor(relative); return true; } catch { return false; } };
 // P11 (no restriction on access to a person's own machine or files): Mission's own reads of the folders the
 // person's space names ({ space: true }) see _private too. Keys (.env, secrets, .git) stay hidden, and writes keep the lock.
 const spaceLocked = (name) => locked(name) && !/^_private$/i.test(name);

@@ -35,6 +35,17 @@ test('New idea: _ideas at the root, else the one _ideas one folder down; none or
   const skipped = await idea(links, 'skips links');
   assert.deepEqual([skipped.status, skipped.body?.path], [201, 'notes/_ideas/skips-links.md']);
 
+  // #579 r2: a folder whose name the writer refuses (':' is not allowed in a path) neither counts nor is picked alone.
+  // ponytail: Linux and macOS only; Windows cannot make the folder, and the writer's rule is the same code there.
+  if (process.platform !== 'win32') {
+    const colon = await daemon(t, undefined, false, folders('notes/_ideas', 'Upcoming: ideas/_ideas'));
+    const picked = await idea(colon, 'beside colon');
+    assert.deepEqual([picked.status, picked.body?.path], [201, 'notes/_ideas/beside-colon.md']);
+    const alone = await daemon(t, undefined, false, folders('Upcoming: ideas/_ideas'));
+    const refusedAlone = await idea(alone, 'colon alone');
+    assert.deepEqual([refusedAlone.status, refusedAlone.body?.error], [404, 'no _ideas folder']);
+  }
+
   const none = await daemon(t, undefined, false, folders('a'));
   const nowhere = await idea(none, 'nowhere');
   assert.deepEqual([nowhere.status, nowhere.body?.error], [404, 'no _ideas folder']);

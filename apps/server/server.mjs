@@ -11,7 +11,7 @@ import { bodyLimit } from 'hono/body-limit';
 import { getRequestListener } from '@hono/node-server';
 import { WebSocketServer } from 'ws';
 import { ORIGIN, MAX_BYTES, PUBLIC_ROUTES, FRAME_CSP, parseSave, SIGN_IN_ORIGINS, DEVICE_CODE, signInUrl } from '../../packages/protocol/index.mjs';
-import { readFile as readWorkspaceFile, readImage as readWorkspaceImage, listDirectory, guardedSave, createFile, createDirectory, setProtection, protection, lockedName, guardFolders, isGuarded, HEAVY, WALK_SKIP } from '../../packages/files/index.mjs';
+import { readFile as readWorkspaceFile, readImage as readWorkspaceImage, listDirectory, guardedSave, createFile, createDirectory, setProtection, protection, pathAllowed, guardFolders, isGuarded, HEAVY, WALK_SKIP } from '../../packages/files/index.mjs';
 import { createXfer } from './xfer.mjs';
 import { createUpdate, toolPath } from './update.mjs';
 import { childEnv, TOOL_NAMES } from './child-env.mjs';
@@ -495,13 +495,15 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
   });
   // New idea: one new file in _ideas/ (or _ideas/needs-done/), named as workspace-hub's new_idea names it; never replaces one.
   // GitHub issue #572 (O299): with no _ideas/ at the root, the one folder down that has one (notes/_ideas, with the workspace
-  // one folder above notes). Two or more are named in the 404, not guessed. #579 r1: only a folder createFile accepts counts:
-  // no link at any level (lstat), no locked name (_private, .git, ... while File protection is on), not a guarded folder;
-  // and none a workspace walk leaves out (WALK_SKIP, dot folders), so an archive's _ideas never makes a second one.
+  // one folder above notes). Two or more are named in the 404, not guessed. #579 r1-r2: only a folder createFile accepts
+  // counts: a path the writer's rules allow (pathAllowed: no ':' or '\\', no locked name such as _private or .git while File
+  // protection is on), no link at any level (lstat), not a guarded folder; and none a workspace walk leaves out (WALK_SKIP,
+  // dot folders), so an archive's _ideas never makes a second one.
   const ideasFolder = async () => {
     const usable = async (relative) => {
+      if (!pathAllowed(relative + '/x.md')) return false;
       let at = workspace;
-      for (const part of relative.split('/')) { at = path.join(at, part); if (lockedName(part) || !await lstat(at).then((s) => s.isDirectory(), () => false)) return false; }
+      for (const part of relative.split('/')) { at = path.join(at, part); if (!await lstat(at).then((s) => s.isDirectory(), () => false)) return false; }
       return !isGuarded(at);
     };
     if (await usable('_ideas')) return '_ideas';
