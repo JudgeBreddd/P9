@@ -15,7 +15,9 @@ const ciFlags = async () => {
   const yaml = await readFile(path.join(root, '.github', 'workflows', 'test.yaml'), 'utf8');
   const line = yaml.split('\n').find((text) => text.includes('scripts/with-tmp.mjs node --test'));
   assert.ok(line, 'the Linux Tests line in test.yaml');
-  return line.slice(line.indexOf('node --test') + 'node --test'.length, line.indexOf('$FILES')).trim().split(/\s+/);
+  // C1 (O286): the flags now sit in the step's run() function, which takes its files as "$@".
+  const end = line.includes('"$@"') ? line.indexOf('"$@"') : line.indexOf('$FILES');
+  return line.slice(line.indexOf('node --test') + 'node --test'.length, end).trim().split(/\s+/);
 };
 
 test('a hung test file names itself in the log and the files after it still report (per-file limit)', { timeout: 60000, skip: process.platform !== 'linux' && 'the per-file limit is on the Linux CI Tests line' }, async (t) => {

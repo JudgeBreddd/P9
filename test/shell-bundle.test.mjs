@@ -131,5 +131,7 @@ test('Shell bundle: JS the desktop shell page loads, and its look', { timeout: 3
   const median = (list) => { const s = [...list].sort((a, b) => a - b); return s[Math.floor(s.length / 2)]; };
   const warm = launches.slice(1), pick = (k) => median(warm.map((l) => l[k]));
   console.log('P9_SHELL_AT ' + JSON.stringify({ first: launches[0], warm: { usable: pick('usable'), markup: pick('markup'), mounted: pick('mounted'), dcl: pick('dcl'), load: pick('load') }, launches }));
-  assert.ok(pick('usable') <= USABLE_BUDGET, `the shell was usable at a warm median of ${pick('usable')} ms from navigation start, over the budget of ${USABLE_BUDGET} ms: ${JSON.stringify(warm.map((l) => l.usable))}`);
+  // C1 (O286): time on a shared runner is not a pass/fail fact. The warm-usable budget is checked only where P9_TIMED is set
+  // (CI's quarantine job, which reports and never blocks; or by hand); the byte budget above stays blocking everywhere.
+  if (process.env.P9_TIMED) assert.ok(pick('usable') <= USABLE_BUDGET, `the shell was usable at a warm median of ${pick('usable')} ms from navigation start, over the budget of ${USABLE_BUDGET} ms: ${JSON.stringify(warm.map((l) => l.usable))}`);
 });

@@ -9,6 +9,15 @@ import path from 'node:path';
 
 const ALONE = new Set(['shell-bundle.test.mjs']);
 const [mode, ...list] = process.argv.slice(2);
+// C1 (O286): test/quarantine.json lists flaky tests taken off the blocking path, { file, name, row, since }. `pattern` prints
+// one regex matching exactly their names (empty when there are none): the shards pass it to --test-skip-pattern and the
+// quarantine job to --test-name-pattern. `quarantine` prints their files. test/quarantine.test.mjs keeps the list honest.
+if (mode === 'pattern' || mode === 'quarantine') {
+  const q = JSON.parse(readFileSync(new URL('quarantine.json', import.meta.url), 'utf8'));
+  const esc = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  console.log(mode === 'pattern' ? (q.length ? `^(${q.map((t) => esc(t.name)).join('|')})$` : '') : [...new Set(q.map((t) => t.file))].join(' '));
+  process.exit(0);
+}
 if (mode === 'together' || mode === 'alone') {
   console.log(list.filter((file) => ALONE.has(path.basename(file)) === (mode === 'alone')).join(' '));
   process.exit(0);

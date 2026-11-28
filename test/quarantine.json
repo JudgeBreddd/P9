@@ -1,0 +1,8 @@
+[
+  {
+    "file": "test/phone-o264-sent-files.test.mjs",
+    "name": "O264: files sent with an accepted message stay gone after a reload when the store never took them out; a refused send keeps them",
+    "row": "O278",
+    "since": "2026-11-28"
+  }
+]

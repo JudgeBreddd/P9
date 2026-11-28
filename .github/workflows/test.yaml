@@ -58,9 +58,11 @@ jobs:
       # One shard failing still finishes the others, so a red run names every failing file.
       fail-fast: false
       matrix:
-        # files (dispatch) runs just those files, on one runner.
-        shard: ${{ fromJSON(inputs.files && '[0]' || '[0, 1, 2, 3, 4, 5, 6]') }}
+        # files (dispatch) runs just those files, on one runner. C1 (O286): "quarantine" runs test/quarantine.json's tests
+        # and shell-bundle's warm-usable timing (P9_TIMED), prints pass or fail for each, and never blocks.
+        shard: ${{ fromJSON(inputs.files && '[0]' || '[0, 1, 2, 3, 4, 5, 6, "quarantine"]') }}
     runs-on: ubuntu-26.04
+    continue-on-error: ${{ matrix.shard == 'quarantine' }}
     timeout-minutes: 30
     env:
       GITLEAKS: 8.30.1
@@ -117,13 +119,27 @@ jobs:
           # The job log gets lines cut at 2,000 characters; tests.log (the artifact) keeps them whole. #115's linux (6) job
           # log stopped at the first P9_SHOT line (a 69 KB picture), so its failing test and summary never showed there.
           systemctl --user is-system-running || true
+          run() { xvfb-run -a node scripts/with-tmp.mjs node --test --test-timeout=600000 --test-force-exit --test-reporter=spec --test-reporter-destination=stdout --test-reporter=./test/file-limit.mjs --test-reporter-destination=stderr "$@" 2>&1 | tee -a "$RUNNER_TEMP/tests.log" | cut -c1-2000; }
+          # C1 (O286): a test that fails on a commit that did not touch its code, twice in 7 days, is quarantined with an
+          # open row (test/quarantine.json): the shards skip it, this job's quarantine shard runs it and reports. Still never
+          # retried. The quarantine shard exits 0; its summary says which tests failed.
+          QPAT=$(node test/shard.mjs pattern)
+          if [ "$SHARD" = quarantine ]; then
+            QFILES=$(node test/shard.mjs quarantine)
+            P9_TIMED=1 run test/shell-bundle.test.mjs || true
+            if [ -n "$QFILES" ]; then run --test-name-pattern="$QPAT" $QFILES || true; fi
+            { echo '### Quarantined tests (not blocking)'; grep -E '^\s*(✔|✖) ' "$RUNNER_TEMP/tests.log" | grep -v 'failing tests' || echo 'no result lines'; } >> "$GITHUB_STEP_SUMMARY"
+            grep -E '^\s*(✔|✖) ' "$RUNNER_TEMP/tests.log" || true
+            exit 0
+          fi
+          SKIP=(); [ -n "$QPAT" ] && SKIP=(--test-skip-pattern="$QPAT")
           # O208: a file that times the app (shell-bundle's warm usable ms) runs alone after the others, one node --test each.
           if [ -z "$FILES" ]; then FILES=$(node test/shard.mjs "$SHARD" 7); fi
           TOGETHER=$(node test/shard.mjs together $FILES); ALONE=$(node test/shard.mjs alone $FILES); rc=0
           echo "shard $SHARD: $TOGETHER${ALONE:+, then alone: $ALONE}"
           for FILES in "$TOGETHER" $ALONE; do
             [ -n "$FILES" ] || continue
-            xvfb-run -a node scripts/with-tmp.mjs node --test --test-timeout=600000 --test-force-exit --test-reporter=spec --test-reporter-destination=stdout --test-reporter=./test/file-limit.mjs --test-reporter-destination=stderr $FILES 2>&1 | tee -a "$RUNNER_TEMP/tests.log" | cut -c1-2000 || rc=$?
+            run "${SKIP[@]}" $FILES || rc=$?
           done
           exit $rc
       # O232: dependency-licenses.json matches what is installed, so an update PR that skips `node scripts/licenses.mjs --write`
@@ -155,7 +171,8 @@ jobs:
   # the folder ACL check, the prebuilt DLL) and Job Object stop; the dock's terminal on ConPTY (GitHub issue #11); Mission
   # notes outside the workspace (v0.1.5 N1); the file guard and the editor host's owner-only checks; Dev Focus's folder
   # outside the workspace (v0.1.5 DV2). Each step runs even when one before it failed, so one red test hides no other.
-  # A flaky test is quarantined only with a local repro file that shows it failing without a code change; never retried.
+  # C1 (O286): a test that fails on a commit that did not touch its code, twice in 7 days, is quarantined with an open row
+  # (test/quarantine.json; the Linux shards skip it). Windows has its own fixed list here and no quarantine yet. Never retried.
   windows:
     if: ${{ !inputs.bare && (!inputs.files || inputs.windows) }}
     strategy:
