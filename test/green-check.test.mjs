@@ -86,10 +86,10 @@ test('green check refuses CI that is missing, pending or red, and a gh that fail
   refused(run({ logs: { 11: '\n' } }), 'the log of CI job "ubuntu" is empty');
 });
 
-test('green check refuses a named test that is missing, failed, or matches more than one passed test', () => {
+test('green check refuses a named test that is missing, failed, or matches more than one passed line', () => {
   refused(run({ logs: { 11: LOG.replaceAll('alpha works', 'alpha broke') } }), 'test/a.test.mjs::alpha works has no passed line');
   refused(run({ logs: { 11: LOG + '\n2026-11-20T10:00:01.0000000Z   ✖ alpha works (3ms)' } }), 'test/a.test.mjs::alpha works failed in CI (1 ✖ line)');
-  refused(run({ logs: { 11: LOG + '\n2026-11-20T10:00:01.0000000Z P9_PASS test/b.test.mjs :: beta works again' } }), 'beta works matches 2 passed tests');
+  refused(run({ logs: { 11: LOG + '\n2026-11-20T10:00:01.0000000Z P9_PASS test/b.test.mjs :: beta works again' } }), 'beta works matches 2 passed lines in one CI job');
 });
 
 test('green check refuses a Tests selector that is not a test file and a title', () => {
@@ -151,21 +151,24 @@ test('green check ignores the advisory quarantine job: its pass is not a second 
 
 // C3 (O288), #574 round 1 blocker 1: marking a draft ready while its run is going cancels that run and starts another on the
 // same commit, and reopening a green PR runs it again. The gate reads only each workflow's newest run on the commit.
-// #574 r1 and r3: a cancelled run is a run replaced; every other run on the commit must be green, from any PR or event.
-test('green check: a cancelled draft run then a green one passes; any red run on the commit refuses, even a different PR\'s', () => {
-  const runs = [{ id: 1, name: 'Tests', workflow_id: 7, event: 'pull_request', status: 'completed', conclusion: 'cancelled' },
-    { id: 2, name: 'Tests', workflow_id: 7, event: 'pull_request', status: 'completed', conclusion: 'success' }];
-  const jobsOf = { 1: [{ id: 11, name: 'quick', conclusion: 'cancelled' }], 2: [{ id: 21, name: 'linux (0)', conclusion: 'success' }] };
-  const after = run({ runs, jobsOf, logs: { 21: LOG } });
-  assert.equal(after.status, 0, after.out);
+// #574 r1-r4: every run on the commit must be complete and green, from any PR or event; a cancelled run is not green, and the
+// refusal says a re-run clears it. A test passing in two runs counts once; two passed lines in one job are ambiguous.
+test('green check: any red or cancelled run on the commit refuses, even a different PR\'s; a test in two green runs counts once', () => {
+  const green = { id: 1, name: 'Tests', workflow_id: 7, event: 'pull_request', status: 'completed', conclusion: 'success' };
+  const cancelled = { ...green, id: 2, conclusion: 'cancelled' }, red = { ...green, id: 2, conclusion: 'failure' };
+  const jobsOf = { 1: [{ id: 11, name: 'linux (0)', conclusion: 'success' }], 2: [{ id: 21, name: 'linux (0)', conclusion: 'success' }] };
+  // A cancelled run before or after a green one (a draft made ready mid-run, a cancelled ready run), or another workflow's.
+  refused(run({ runs: [cancelled, green], jobsOf, logs: { 11: LOG, 21: LOG } }), 'is not green (Tests cancelled); re-run a cancelled run');
+  refused(run({ runs: [green, { ...cancelled, id: 3, name: 'scan', workflow_id: 9 }], jobsOf: { ...jobsOf, 3: [] }, logs: { 11: LOG } }), 'is not green (scan cancelled)');
+  // The same head on two PRs: a green run for the other PR does not hide this PR's red run, in either order.
+  refused(run({ runs: [red, green], jobsOf, logs: { 11: LOG, 21: LOG } }), 'is not green (Tests failure)');
+  refused(run({ runs: [green, { ...red, id: 0 }], jobsOf: { ...jobsOf, 0: [] }, logs: { 11: LOG } }), 'is not green (Tests failure)');
   // A reopened green PR: two green runs with the same lines are still one passed test each.
-  const twice = run({ runs: runs.map((r) => ({ ...r, conclusion: 'success' })), jobsOf: { 1: [{ id: 11, name: 'linux (0)', conclusion: 'success' }], 2: jobsOf[2] }, logs: { 11: LOG, 21: LOG } });
+  const twice = run({ runs: [green, { ...green, id: 2 }], jobsOf, logs: { 11: LOG, 21: LOG } });
   assert.equal(twice.status, 0, twice.out);
-  // The same head on two PRs: a newer green run for the other PR does not hide this PR's red run (nor the reverse order).
-  const red = { ...runs[0], conclusion: 'failure' };
-  refused(run({ runs: [red, runs[1]], jobsOf: { 1: [], 2: jobsOf[2] }, logs: { 21: LOG } }), 'is not green (Tests failure)');
-  refused(run({ runs: [{ ...runs[1], id: 1 }, { ...red, id: 2 }], jobsOf: { 1: jobsOf[2], 2: [] }, logs: { 21: LOG } }), 'is not green (Tests failure)');
-  refused(run({ runs: [...runs, { id: 3, name: 'Pull request checks', workflow_id: 8, status: 'completed', conclusion: 'failure' }], jobsOf: { ...jobsOf, 3: [] }, logs: { 21: LOG } }), 'is not green (Pull request checks failure)');
+  // But two tests one name matches, in one job, are ambiguous even when the other run has one.
+  const extra = LOG + '\n2026-11-20T10:00:01.0000000Z P9_PASS test/b.test.mjs :: beta works again';
+  refused(run({ runs: [green, { ...green, id: 2 }], jobsOf, logs: { 11: extra, 21: LOG } }), 'beta works matches 2 passed lines in one CI job');
 });
 
 // #574 round 2 blocker: a run by hand (workflow_dispatch: named files, bare, evidence) shares the Tests workflow with the PR's
