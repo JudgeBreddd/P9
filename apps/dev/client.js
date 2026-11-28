@@ -352,9 +352,11 @@ const EDITOR_MIN = DEFAULT_EDITOR_MIN_DIMENSIONS.width;
 let only = false, said = '', settle = 0;
 const tabCount = () => v.window.tabGroups.all.reduce((n, group) => n + group.tabs.length, 0);
 const wide = part => (layout.isVisible(part) ? Math.round(layout.getSize(part).width) : 0);
-const filling = () => only && tabCount() === 0;
+const filling = () => only !== false && tabCount() === 0;
+// only: the width the shell gives this view while files-only. The list is filled only at that width: a view already resized
+// for the next state (the chat closed) is left alone, whichever of the resize and the word about it comes first.
 const fill = () => {
-  if (!filling() || !layout.isVisible(LIST)) return;
+  if (!filling() || Math.abs(innerWidth - only) > 2 || !layout.isVisible(LIST)) return;
   const list = layout.getSize(LIST), spare = layout.getSize(EDITOR).width;
   if (spare > 0) layout.setSize(LIST, { width: list.width + spare, height: list.height });
 };
@@ -371,11 +373,13 @@ const tell = () => {
 function filesOnly() {
   clearTimeout(settle);
   document.body.classList.toggle('p9-files', filling());
-  if (filling()) { DEFAULT_EDITOR_MIN_DIMENSIONS.width = 0; layout.layout(); fill(); } else settle = setTimeout(unfill, 500, true);
+  if (!filling()) settle = setTimeout(unfill, 500, true);
+  else { if (DEFAULT_EDITOR_MIN_DIMENSIONS.width !== 0) { DEFAULT_EDITOR_MIN_DIMENSIONS.width = 0; layout.layout(); } fill(); }
   tell();
 }
 window.p9dev.onOnly(value => { only = value; filesOnly(); });
 v.window.tabGroups.onDidChangeTabs(filesOnly);
+v.window.tabGroups.onDidChangeTabGroups(filesOnly); // a group added, removed or restored whole brings its tabs without a tab event
 layout.onDidChangePartVisibility(tell);
 const sized = new ResizeObserver(() => { fill(); unfill(); tell(); });
 for (const part of document.querySelectorAll('.part.sidebar, .part.editor')) sized.observe(part);

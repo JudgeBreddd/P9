@@ -281,7 +281,8 @@ const usedAgent = a => { try { localStorage.setItem('p9-agent-last', a); } catch
 // empty page, as before.
 const LIST_MIN = 170, LIST_START = 300; // the editor's narrowest file list, and its first width
 let devFiles = null, devWide = null, devKept = null;
-const devOnly = () => S.focus === 'dev' && devFiles?.tabs === 0 && !!side.current() && side.current().mode !== 'full';
+// Not with both the icon strip and the file list hidden: there would be nothing to show, so the editor's empty page stays.
+const devOnly = () => S.focus === 'dev' && devFiles?.tabs === 0 && devFiles.rest + devFiles.list > 0 && !!side.current() && side.current().mode !== 'full';
 const devBeside = () => {
   if (!devOnly()) return null;
   const least = devFiles.rest + (devFiles.list ? LIST_MIN : 0), most = devFiles.list ? Math.max(least, $('.stage').clientWidth - SIDE_GAP - SIDE_MIN) : least;
@@ -314,7 +315,9 @@ function devFilesSaid(state) {
     if (had.list && !state.list) { devKept = devWide; devWide = state.rest; }
     else if (!had.list && state.list) devWide = devKept ?? state.rest + Math.max(state.list, LIST_START);
   }
-  if (side.current()) side.apply(); // its listeners place the view; with no panel nothing changes
+  // Its listeners place the view; with no panel nothing changes. Not for a page that is gone (null): placing the view opens
+  // the editor again, and a page that crashed is rebuilt on the next open, not at once (#581 r1).
+  if (state && side.current()) side.apply();
 }
 window.p9?.onDevFiles?.(devFilesSaid);
 if (sampleView) window.__side = side; // ponytail: the UI test's door to the panel (sample data is handed in only by tests, never in a packaged build)

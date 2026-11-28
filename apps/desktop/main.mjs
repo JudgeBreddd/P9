@@ -1235,7 +1235,9 @@ export async function createDesktop({ state, open } = {}) {
     // Subframes (the workbench's webviews) stay on p9://dev/ and p9://webview/; the CSP's frame-src says the same.
     devView.webContents.on('will-frame-navigate', event => { if (!event.isMainFrame && !event.url.startsWith(DEV_URL) && !event.url.startsWith(WEBVIEW_URL) && !/^about:(blank|srcdoc)$/.test(event.url)) event.preventDefault(); });
     devView.webContents.on('will-attach-webview', event => event.preventDefault());
-    devView.webContents.on('render-process-gone', () => { dev = null; devReady = false; devFilesGone(); });
+    // Only the view in use: a replaced view's end says nothing about the one that took its place (#581 r1).
+    const view = devView;
+    devView.webContents.on('render-process-gone', () => { if (view !== devView) return; dev = null; devReady = false; devFilesGone(); });
     // Ctrl/Alt+1/2/3 switch focus from inside the editor too: hand the key to the shell.
     devView.webContents.on('before-input-event', (event, input) => {
       if (input.type === 'keyDown' && (input.control || input.alt) && !input.shift && ['1', '2', '3'].includes(input.key)) {
@@ -1382,11 +1384,14 @@ export async function createDesktop({ state, open } = {}) {
     if (!shown) devAgain();
     // The shell measures in its own (zoomed) CSS pixels; the view is placed in window pixels.
     const z = window.webContents.getZoomFactor(), px = value => Math.round(value * z);
+    // O294: only = the shell shows the view files-only (no editor tab open, a panel beside it). The editor page is told the
+    // width the view gets then (false when not), before the view is sized: it gives its file list the editor area's width
+    // only while its own width is that one, so a resize and this message may arrive in either order (#581 r1).
+    const only = b.only ? px(b.width) : false;
+    if (only !== outer.devOnly) { outer.devOnly = only; devView.webContents.send('p9dev:only', only); }
     devView.setBounds({ x: px(b.x), y: px(b.y), width: px(b.width), height: px(b.height) });
     devView.setVisible(true);
     if (!shown) devView.webContents.focus();
-    // O294: only = the shell shows the view files-only (no editor tab open, a panel beside it); the editor page is told when it changes.
-    if (!!b.only !== outer.devOnly) { outer.devOnly = !!b.only; devView.webContents.send('p9dev:only', outer.devOnly); }
     return { ok: true, files: outer.devFiles }; // files: what the editor page last said, for a shell that loaded after it
   });
   // The view draws above the page, so a top-bar menu opened over it

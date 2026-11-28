@@ -659,12 +659,13 @@ async function shot(page, name) {
   console.log('SHOT ' + name + ' ' + png.toString('base64'));
   if (evidence) { await mkdir(evidence, { recursive: true }); await writeFile(path.join(evidence, name + '.jpg'), png); }
 }
-async function openDevFocus(t, editor, extra = {}, flags = []) {
-  const instance = await daemon(t), home = await mkdtemp(path.join(os.tmpdir(), 'p9-dev-home-'));
+// again: { instance, home } of an earlier call, for the same daemon and profile after that app closed (a restart).
+async function openDevFocus(t, editor, extra = {}, flags = [], again) {
+  const instance = again?.instance ?? await daemon(t), home = again?.home ?? await mkdtemp(path.join(os.tmpdir(), 'p9-dev-home-'));
   const env = { ...process.env, HOME: home, PATH: editor.path, P9_EDITOR_HOST: editor.host, ...extra }; delete env.ELECTRON_RUN_AS_NODE;
   const app = await _electron.launch({ args: [...flags, path.join(root, 'apps/desktop/start.cjs'), '--state', instance.state, '--user-data-dir=' + path.join(home, 'profile')], env, chromiumSandbox: true, timeout: 20000 });
   const proc = app.process();
-  t.after(async () => { await Promise.race([app.close(), sleep(15000)]); proc.kill(); });
+  t.after(async () => { await Promise.race([app.close().catch(() => {}), sleep(15000)]); proc.kill(); });
   const shell = await app.firstWindow();
   await shellReady(shell);
   const devWindow = app.waitForEvent('window', { predicate: page => page.url().startsWith('p9://dev/'), timeout: 60000 });
@@ -923,10 +924,10 @@ test('O268: the editor terminal uses the page renderer at its font size when Web
 // O294: Dev Focus has an editor area only while a tab is open. A file: the file list and the editor. A file and the chat:
 // both, and the chat. The chat and no file: the file list and the chat, no editor area between them. Nothing: the editor's own
 // empty page. The first check after the last tab closes pins the workbench internals the build leans on (apps/dev/client.js).
-test('O294: no editor tab and the chat beside: the file list and the chat, no editor area; the divider sizes the list; Ctrl+B, the palette and a shell reload work; a file brings the editor back', { skip: process.platform !== 'linux', timeout: 360000 }, logged(async t => {
+test('O294: no editor tab and the chat beside: the file list and the chat, no editor area; the divider sizes the list; Ctrl+B, the palette and a shell reload work; a file brings the editor back', { skip: process.platform !== 'linux', timeout: 540000 }, logged(async t => {
   const editor = await editorFor();
   if (!editor) return t.skip('needs the editor server (P9_EDITOR_HOST, or the fixtures reh.tar.gz)');
-  const { instance, app, shell, dev, errors } = await openDevFocus(t, editor, {});
+  let { instance, home, app, shell, dev, errors } = await openDevFocus(t, editor, {});
   await writeFile(path.join(instance.workspace, 'note.txt'), 'note\n');
   // What shows: the editor page's parts (0 when hidden), the view's place in the window (main), the shell's panel and tab.
   const read = async () => ({
@@ -1017,5 +1018,47 @@ test('O294: no editor tab and the chat beside: the file list and the chat, no ed
   await drag(-50);
   await until('dragged wider, the chat on the left', g => filesOnly(g) && g.list === start + 50 && g.chatLeft < g.view.x);
   await seen('o294-9-chat-left');
+  // Both the icon strip and the file list hidden: nothing to show files-only, so the whole view (the editor's empty page, with
+  // its own menu and palette) stays beside the chat, on either side (#581 r1).
+  const hide = hidden => dev.evaluate(hidden => { for (const part of ['workbench.parts.sidebar', 'workbench.parts.activitybar']) window.devFocus.layout.setPartHidden(hidden, part); }, hidden);
+  const bare = g => g.strip === 0 && g.list === 0 && g.chat > 0 && g.tab === 'Editor' && g.view.width === g.stage - 8 - g.chat && g.view.width >= 220;
+  await hide(true);
+  await until('both bars hidden, the chat on the left', g => bare(g) && g.chatLeft < g.view.x);
+  await shell.click('#side [data-side-swap]');
+  await until('both bars hidden, the chat on the right', g => bare(g) && g.chatLeft > g.view.x);
+  await hide(false);
+  got = await until('the bars back', g => filesOnly(g) && g.chat > 0);
+  // The chat closed with no tab open: the view goes whole and the file list keeps its width.
+  const wide = got.list;
+  await shell.click('#sideToggle');
+  await until('the chat off from the file list', g => g.tabs === 0 && g.chat === 0 && whole(g) && g.list === wide);
+  await shell.click('#sideToggle');
+  await until('the chat on again', g => filesOnly(g) && g.list === wide && g.chat > 0);
+  // A crashed editor page with the chat beside it stays down until the view is next placed; it is not rebuilt at once. Twice.
+  const pages = () => app.evaluate(({ webContents }) => webContents.getAllWebContents().filter(w => w.getURL().startsWith('p9://dev/')).map(w => [w.id, w.isCrashed()]));
+  for (const round of [1, 2]) {
+    const [[id]] = await pages();
+    await app.evaluate(({ webContents }, id) => webContents.fromId(id).forcefullyCrashRenderer(), id);
+    await sleep(3000);
+    assert.deepEqual(await pages(), [[id, true]], 'crash ' + round + ': the editor page is not rebuilt at once');
+    const next = app.waitForEvent('window', { predicate: page => page.url().startsWith('p9://dev/'), timeout: 60000 });
+    await shell.click('#sideToggle'); // the chat off places the view, which opens the editor again
+    dev = await next;
+    await dev.waitForFunction(() => window.devFocusReady, null, { timeout: 120000 });
+    await until('rebuilt after crash ' + round, g => g.tabs === 0 && g.chat === 0 && whole(g));
+    await shell.click('#sideToggle');
+    await until('the chat on after crash ' + round, g => filesOnly(g) && g.chat > 0);
+  }
+  // A restart (the same daemon and profile): a fresh editor page says what it shows, with a tab open and with none.
+  await dev.evaluate(() => window.devFocus.open('note.txt'));
+  await until('a file before the restart', g => g.tabs === 1 && g.chat > 0 && whole(g));
+  for (const round of [1, 2]) {
+    await app.close();
+    ({ app, shell, dev } = await openDevFocus(t, editor, {}, [], { instance, home }));
+    got = await until('after restart ' + round, g => g.chat > 0 && (g.tabs ? whole(g) : filesOnly(g)));
+    if (round === 1) { await closeAll(); await until('no tab before restart 2', g => filesOnly(g) && g.chat > 0); }
+    else assert.ok(filesOnly(got), 'a fresh editor with no tab and the chat on starts as the file list and the chat');
+  }
+  await seen('o294-10-restarted');
   assert.deepEqual(online(errors), []);
 }));
