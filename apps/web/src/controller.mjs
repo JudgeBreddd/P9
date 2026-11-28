@@ -294,16 +294,23 @@ $('#sideToggle').onclick = () => setSideChat(side.current()?.slot !== 'dan-chat'
 side.tab($('#devTab .stab'), 'main');
 // O294: the editor area's close button. The editor page does it, saves it and says what it shows (also at every start); only
 // that moves this layout: the view narrows to the file list and the side panel (the chat, opened if nothing shows) takes the rest.
+// The button shows once the editor page has said its state (it can act on a click then); a reloaded shell asks main for it.
 const devClose = $('#devClose'), stage = $('.stage');
-devClose.hidden = !window.p9?.devEditor;
-devClose.onclick = () => window.p9.devEditor(!stage.dataset.devClosed);
-window.p9?.onDevEditor?.(closed => {
+let devHeard = false;
+const devEditorState = closed => {
+  devHeard = true;
   if (closed) stage.dataset.devClosed = '1'; else delete stage.dataset.devClosed;
   $('#devTab .stab').textContent = closed ? 'Files' : 'Editor';
   devClose.textContent = closed ? '⤢' : '×'; devClose.title = closed ? 'Open the editor area' : 'Close the editor area'; devClose.ariaLabel = devClose.title;
-  if (closed && !side.current()) setSideChat(true);
+  devClose.hidden = false;
+  $('#side .handle-v').inert = closed; // the width is fixed while closed: no drag, no arrow keys
+  // Under 720 px the chat would take the whole stage and hide the file list with this button, so it is not opened there.
+  if (closed && !side.current() && !matchMedia('(max-width: 719px)').matches) setSideChat(true);
   placeDev();
-});
+};
+devClose.onclick = () => window.p9.devEditor(!stage.dataset.devClosed);
+window.p9?.onDevEditor?.(devEditorState);
+window.p9?.devEditor?.().then(({ closed }) => { if (!devHeard && typeof closed === 'boolean') devEditorState(closed); });
 if (sampleView) window.__side = side; // ponytail: the UI test's door to the panel (sample data is handed in only by tests, never in a packaged build)
 // Item 19 (threat model row 65): an artifact (artifact.mjs) in the side panel's 'artifact' slot, in the mode the agent
 // picked; its chip in the chat reopens it. Answer 2 in specs/side-panel.md: in Dev Focus with the chat beside the

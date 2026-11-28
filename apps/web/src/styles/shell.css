@@ -705,7 +705,6 @@ canvas.pet{image-rendering:pixelated;cursor:grab;touch-action:none;pointer-event
 /* O294: 348 px of file list plus the 8 px placeDev keeps between the view and the side panel. */
 .shell[data-focus=dev] .stage[data-dev-closed][data-side=right]:not([data-side-mode=full]){grid-template-columns:356px minmax(0,1fr)}
 .shell[data-focus=dev] .stage[data-dev-closed][data-side=left]:not([data-side-mode=full]){grid-template-columns:minmax(0,1fr) 356px}
-.shell[data-focus=dev] .stage[data-dev-closed] .side .handle-v{pointer-events:none}
 #devTab #devClose{margin-right:6px}
 .stage[data-side-mode=full]{grid-template-columns:minmax(0,1fr)}
 .stage[data-side-mode=full]>.side{grid-area:1/1;z-index:15}

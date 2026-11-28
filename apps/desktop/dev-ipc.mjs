@@ -96,6 +96,7 @@ export function devIpc(outer) {
   // O294: what the editor page now shows (the editor area closed or open); the shell narrows or widens the view to match.
   ipcMain.handle('p9dev:editor-closed', (event, ...args) => {
     if (!outer.fromDev(event) || args.length !== 1 || typeof args[0] !== 'boolean') throw new Error('ipc-sender-refused');
+    outer.devEditorClosed = args[0]; // a reloaded shell asks main for it (p9:dev-editor with no argument)
     outer.window.webContents.send('p9:dev-editor-state', args[0]);
     return { ok: true };
   });

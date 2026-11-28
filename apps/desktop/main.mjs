@@ -112,7 +112,7 @@ const isDevPage = url => url.split(/[?#]/)[0] === DEV_URL;
 
 export async function createDesktop({ state, open } = {}) {
   // outer: createDesktop's names that the modules split out of it (F9) read and set; getters and setters keep them live.
-  const outer = { get APP_URL() { return APP_URL; }, get cardsHide() { return cardsHide; }, set cardsHide(v) { cardsHide = v; },
+  const outer = { devEditorClosed: null, get APP_URL() { return APP_URL; }, get cardsHide() { return cardsHide; }, set cardsHide(v) { cardsHide = v; },
     get cardsItems() { return cardsItems; }, set cardsItems(v) { cardsItems = v; },
     get cardsView() { return cardsView; }, set cardsView(v) { cardsView = v; }, get devFolder() { return devFolder; },
     get devReady() { return devReady; }, set devReady(v) { devReady = v; }, get devServing() { return devServing; },
@@ -1397,9 +1397,11 @@ export async function createDesktop({ state, open } = {}) {
     return 'data:image/jpeg;base64,' + (size.width > width ? image.resize({ width, height, quality: 'good' }) : image).toJPEG(80).toString('base64');
   });
   // O294: the editor area's close button. Only the shell may ask; the editor page does it and says what it shows (p9dev:editor-closed).
+  // No argument: what the editor page last said (null before it has), for a shell that loaded after it.
   ipcMain.handle('p9:dev-editor', async (event, ...args) => {
     if (event.sender !== window.webContents || event.senderFrame !== window.webContents.mainFrame || event.senderFrame.url !== APP_URL
-        || args.length !== 1 || typeof args[0] !== 'boolean') throw new Error('ipc-sender-refused');
+        || args.length > 1 || (args.length === 1 && typeof args[0] !== 'boolean')) throw new Error('ipc-sender-refused');
+    if (!args.length) return { closed: outer.devEditorClosed };
     devView?.webContents.send('p9dev:editor', args[0]);
     return { ok: true };
   });

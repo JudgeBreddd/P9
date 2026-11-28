@@ -339,8 +339,42 @@ await followLook(config.look);
 let looking = Promise.resolve();
 window.p9dev.onLook(look => { looking = looking.then(() => followLook(look)).catch(error => console.error('p9: editor look failed:', error.message)); });
 await (await getService(IExtensionService)).whenInstalledExtensionsRegistered();
+// O294: the editor area can be closed, leaving the file list and the chat. The workbench's own hide-editor switch always opens
+// the panel in its place, so the Explorer goes into the secondary side bar and that bar is maximized: the file list alone.
+// Opening a file un-maximizes it (the workbench does that itself), which opens the editor area again. Closing records what it
+// takes over (whether it moved the Explorer, whether the secondary bar was showing) and opening undoes only that; the record is
+// saved here and applied at the next start, before p9 edit requests are let in. Nothing saved = the layout is not touched.
+// One change at a time, in order, saved and told to the shell only once the layout matches (p9dev.editorClosed).
+const views = await getService(IViewDescriptorService), layout = await getService(IWorkbenchLayoutService);
+const SIDEBAR = 0, AUX = 2, AUX_PART = 'workbench.parts.auxiliarybar', EDITOR_KEY = 'p9-editor-closed'; // ViewContainerLocation, Parts
+let taken = (() => { try { return JSON.parse(localStorage.getItem(EDITOR_KEY)); } catch { return null; } })(); // null while open
+const applyEditor = async closed => {
+  const explorer = views.getViewContainerById('workbench.view.explorer'), where = () => explorer && views.getViewContainerLocation(explorer);
+  if (closed) {
+    const was = taken ?? { moved: where() !== AUX, auxShown: layout.isVisible(AUX_PART) };
+    if (explorer && where() !== AUX) views.moveViewContainerToLocation(explorer, AUX);
+    await v.commands.executeCommand('workbench.view.explorer');
+    layout.setAuxiliaryBarMaximized(true);
+    taken = was;
+  } else if (taken) {
+    const was = taken;
+    taken = null;
+    layout.setAuxiliaryBarMaximized(false);
+    if (was.moved && where() !== SIDEBAR) views.moveViewContainerToLocation(explorer, SIDEBAR);
+    if (!was.auxShown) await v.commands.executeCommand('workbench.action.closeAuxiliaryBar');
+    if (was.moved) await v.commands.executeCommand('workbench.view.explorer');
+    await v.commands.executeCommand('workbench.action.focusActiveEditorGroup'); // the opened file keeps the keyboard
+  }
+  try { if (taken) localStorage.setItem(EDITOR_KEY, JSON.stringify(taken)); else localStorage.removeItem(EDITOR_KEY); } catch {}
+  await window.p9dev.editorClosed(!!taken);
+};
+let editorChange = Promise.resolve();
+const setEditorClosed = closed => (editorChange = editorChange.then(() => applyEditor(closed)).catch(error => console.error('p9: the editor area did not change:', error.message)));
+layout.onDidChangeAuxiliaryBarMaximized(() => { if (taken && !layout.isAuxiliaryBarMaximized()) setEditorClosed(false); });
+window.p9dev.onEditor(setEditorClosed);
+await setEditorClosed(!!taken);
 // Hooks for the Electron tests (test/dev.test.mjs); the page's own code already holds this API.
-window.devFocus = { v, root, layout, open: async name => v.window.showTextDocument(await v.workspace.openTextDocument(v.Uri.joinPath(v.Uri.parse(guardRoot.toString()), name)), { preview: false }) };
+window.devFocus = { v, root, views, layout, open: async name => v.window.showTextDocument(await v.workspace.openTextDocument(v.Uri.joinPath(v.Uri.parse(guardRoot.toString()), name)), { preview: false }) };
 // p9 edit / p9 diff (threat model row 14): main sends only checked workspace-relative names, once this page can open them.
 const fileUri = name => v.Uri.joinPath(v.Uri.parse(guardRoot.toString()), name);
 window.p9dev.onOpen(async request => {
@@ -360,29 +394,4 @@ let saving = null;
 const saveSoon = () => { clearTimeout(saving); saving = setTimeout(() => storage.flush().catch(error => console.error('p9: the editor place was not saved:', error.message)), 100); };
 v.window.tabGroups.onDidChangeTabs(saveSoon);
 v.window.tabGroups.onDidChangeTabGroups(saveSoon);
-// O294: the editor area can be closed, leaving the file list and the chat. The workbench's own hide-editor switch always opens
-// the panel in its place, so the Explorer moves into the secondary side bar and that bar is maximized: the file list alone.
-// Opening a file un-maximizes it (the workbench does that itself), which puts the Explorer back on the left. The choice is saved
-// here and applied at every start, and the shell hears what is shown (p9dev.editorClosed). A moved Explorer is put back at
-// start too, so a crash while closed never leaves it on the right.
-const views = await getService(IViewDescriptorService), layout = await getService(IWorkbenchLayoutService);
-const SIDEBAR = 0, AUX = 2; // ViewContainerLocation
-let editorClosed = false;
-const setEditorClosed = async closed => {
-  editorClosed = closed;
-  try { localStorage.setItem('p9-editor-closed', closed ? '1' : '0'); } catch {}
-  const explorer = views.getViewContainerById('workbench.view.explorer'), where = closed ? AUX : SIDEBAR;
-  const moved = explorer && views.getViewContainerLocation(explorer) !== where;
-  if (moved) views.moveViewContainerToLocation(explorer, where);
-  if (closed) { await v.commands.executeCommand('workbench.view.explorer'); layout.setAuxiliaryBarMaximized(true); }
-  else if (moved) { // only what closing did is undone: a secondary bar the user maximized stays so
-    layout.setAuxiliaryBarMaximized(false);
-    // Opening it shows it in the sidebar again; the file that was opened keeps the keyboard.
-    for (const command of ['workbench.action.closeAuxiliaryBar', 'workbench.view.explorer', 'workbench.action.focusActiveEditorGroup']) await v.commands.executeCommand(command);
-  }
-  await window.p9dev.editorClosed(closed);
-};
-layout.onDidChangeAuxiliaryBarMaximized(() => { if (editorClosed && !layout.isAuxiliaryBarMaximized()) setEditorClosed(false).catch(error => console.error('p9: the editor area did not open:', error.message)); });
-window.p9dev.onEditor(closed => setEditorClosed(closed).catch(error => console.error('p9: the editor area did not change:', error.message)));
-await setEditorClosed((() => { try { return localStorage.getItem('p9-editor-closed') === '1'; } catch { return false; } })());
 window.devFocusReady = true;

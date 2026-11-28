@@ -922,7 +922,7 @@ test('O268: the editor terminal uses the page renderer at its font size when Web
 
 // O294: the editor area's close button leaves the file list on the left and the chat in the rest; the choice survives a
 // restart; opening a file brings the editor back (and the Explorer back to the sidebar, the file keeping the keyboard).
-test('O294: Dev Focus closes the editor area to the file list and the chat; still closed after a restart; opening a file brings it back', { skip: process.platform !== 'linux', timeout: 360000 }, logged(async t => {
+test('O294: Dev Focus closes the editor area to the file list and the chat; still closed after a restart; opening a file brings it back; only what closing changed is undone', { skip: process.platform !== 'linux', timeout: 360000 }, logged(async t => {
   const editor = await editorFor();
   if (!editor) return t.skip('needs the editor server (P9_EDITOR_HOST, or the fixtures reh.tar.gz)');
   const instance = await daemon(t), home = await mkdtemp(path.join(os.tmpdir(), 'p9-dev-home-'));
@@ -952,16 +952,35 @@ test('O294: Dev Focus closes the editor area to the file list and the chat; stil
       chatWidth: Math.round(document.querySelector('#side').getBoundingClientRect().width), tab: document.querySelector('#devTab .stab').textContent })),
   });
   const closedNow = got => got.closed && got.width === 348 && got.editor === 0 && got.panel === 0 && got.sidebar === 0 && got.files === 'auxiliarybar' && got.auxiliarybar > 250;
+  const openNow = got => !got.closed && got.width > 348 && got.editor > 0;
+  const toggle = async ({ shell }, closed) => {
+    await shell.click('#devClose');
+    await shell.waitForFunction(want => !!document.querySelector('.stage').dataset.devClosed === want, closed, { timeout: 15000 });
+    await sleep(1000);
+  };
   const one = await launch();
   await one.dev.evaluate(() => window.devFocus.open('note.txt'));
-  await one.shell.click('#devClose');
-  await one.shell.waitForFunction(() => !!document.querySelector('.stage').dataset.devClosed, null, { timeout: 15000 });
-  await sleep(1000);
+  // The user's own layout (the Explorer in the secondary side bar, showing): closing and the reopen button leave it as it was.
+  await one.dev.evaluate(async () => { const { views, v } = window.devFocus; views.moveViewContainerToLocation(views.getViewContainerById('workbench.view.explorer'), 2); await v.commands.executeCommand('workbench.view.explorer'); });
+  await one.shell.waitForFunction(() => !document.querySelector('#devClose').hidden, null, { timeout: 15000 });
+  await toggle(one, true);
   let got = await read(one);
+  console.log('NOTE closed over the user layout: ' + JSON.stringify(got));
+  assert.ok(closedNow(got), 'closed: only the file list (348 px), no editor or panel: ' + JSON.stringify(got));
+  await toggle(one, false);
+  got = await read(one);
+  console.log('NOTE reopened by the button: ' + JSON.stringify(got));
+  assert.ok(openNow(got) && got.files === 'auxiliarybar' && got.auxiliarybar > 0 && got.sidebar === 0, 'the user layout is back: ' + JSON.stringify(got));
+  assert.equal(await one.shell.locator('#devClose').textContent(), '×');
+  // The default layout from here on: the Explorer in the sidebar, the secondary bar closed.
+  await one.dev.evaluate(async () => { const { views, v } = window.devFocus; views.moveViewContainerToLocation(views.getViewContainerById('workbench.view.explorer'), 0); for (const c of ['workbench.action.closeAuxiliaryBar', 'workbench.view.explorer']) await v.commands.executeCommand(c); });
+  await toggle(one, true);
+  got = await read(one);
   console.log('NOTE closed: ' + JSON.stringify(got));
   assert.ok(closedNow(got), 'closed: only the file list (348 px), no editor or panel: ' + JSON.stringify(got));
   assert.equal(got.chat, 'dan-chat', 'the chat shows beside it');
   assert.equal(got.tab, 'Files');
+  assert.equal(await one.shell.locator('#devClose').textContent(), '⤢');
   await shot(one.dev, 'o294-closed-dev');
   await shot(one.shell, 'o294-closed-shell');
   assert.deepEqual(online(one.errors), []);
@@ -980,10 +999,22 @@ test('O294: Dev Focus closes the editor area to the file list and the chat; stil
   await sleep(1000);
   got = await read(two);
   console.log('NOTE after opening a file: ' + JSON.stringify(got));
-  assert.ok(!got.closed && got.width > 348 && got.editor > 0 && got.sidebar > 0 && got.files === 'sidebar' && got.auxiliarybar === 0, 'open again: ' + JSON.stringify(got));
+  assert.ok(openNow(got) && got.sidebar > 0 && got.files === 'sidebar' && got.auxiliarybar === 0, 'open again: ' + JSON.stringify(got));
   assert.equal(got.tab, 'Editor');
   assert.equal(await two.dev.evaluate(() => !!document.activeElement?.closest('.part.editor')), true, 'the opened file has the keyboard');
   await shot(two.dev, 'o294-open-dev');
+  // A close and a file open at the same moment: whichever wins, the shell, the layout and the saved choice agree.
+  await Promise.all([two.shell.click('#devClose'), two.dev.evaluate(() => window.devFocus.open('note.txt'))]);
+  await sleep(3000);
+  const agree = async () => ({ ...await read(two), ...await two.dev.evaluate(() => ({ maximized: window.devFocus.layout.isAuxiliaryBarMaximized(), saved: localStorage.getItem('p9-editor-closed') !== null })) });
+  got = await agree();
+  console.log('NOTE after a close and an open at once: ' + JSON.stringify(got));
+  assert.ok(got.closed ? closedNow(got) && got.maximized && got.saved : openNow(got) && !got.maximized && !got.saved && got.files === 'sidebar', 'shell, layout and saved choice agree: ' + JSON.stringify(got));
+  // A reloaded shell asks main for the editor's state: still closed, the reopen button showing.
+  if (!got.closed) await toggle(two, true);
+  await two.shell.reload();
+  await shellReady(two.shell);
+  await two.shell.waitForFunction(() => !!document.querySelector('.stage').dataset.devClosed && !document.querySelector('#devClose').hidden && document.querySelector('#devClose').textContent === '⤢', null, { timeout: 15000 });
   assert.deepEqual(online(two.errors), []);
-  console.log('PASS O294 close, restart, open');
+  console.log('PASS O294 close, reopen, restart, open, race, shell reload');
 }));
