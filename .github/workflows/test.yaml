@@ -317,6 +317,37 @@ jobs:
           retention-days: 14
           if-no-files-found: warn
 
+  # C5 (O290): the one check GitHub requires on main (.github/ruleset-main.json, with R5's `review`). A required check must
+  # report on every PR, but a matrix job that is skipped reports once under its bare name (`linux`, not `linux (0)`), so
+  # naming the shards would hold every PR whose heavy jobs skip forever. This job waits for quick and the heavy jobs and
+  # passes when quick passed and each heavy job passed, or was skipped because quick said the change does not need it or
+  # the PR is a draft (the quarantine shard cannot fail it). A run by hand skips quick on purpose, so there the job only
+  # says so and passes, under another name: a dispatched run on a PR's head never adds a `tests` result to that commit.
+  # #577 r1: this file comes from the PR itself, so the gate is only as good as its review; the ruleset also requires
+  # `review` (R5), the reviewer's pass on that exact head, which a change to this job needs like any other.
+  tests:
+    name: ${{ github.event_name == 'workflow_dispatch' && 'tests (by hand)' || 'tests' }}
+    needs: [quick, linux, windows]
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Quick passed; each heavy job passed, or was skipped when not due
+        env:
+          EVENT: ${{ github.event_name }}
+          QUICK: ${{ needs.quick.result }}
+          HEAVY: ${{ needs.quick.outputs.heavy }}
+          DRAFT: ${{ github.event.pull_request.draft }}
+          LINUX: ${{ needs.linux.result }}
+          WINDOWS: ${{ needs.windows.result }}
+        run: |
+          echo "event $EVENT, quick $QUICK (heavy $HEAVY, draft ${DRAFT:-no}), linux $LINUX, windows $WINDOWS"
+          [ "$EVENT" != workflow_dispatch ] || { echo "a run by hand: the jobs above are its result"; exit 0; }
+          [ "$QUICK" = success ] || { echo "quick did not pass"; exit 1; }
+          case "$HEAVY" in true|false) ;; *) echo "quick gave heavy '$HEAVY', not true or false"; exit 1;; esac
+          due=skipped; [ "$HEAVY" = true ] && [ "$DRAFT" != true ] && due=success
+          for r in "$LINUX" "$WINDOWS"; do [ "$r" = success ] || [ "$r" = "$due" ] || { echo "a heavy job ended $r (due: $due)"; exit 1; }; done
+
   # Item 15 (v0.1.6 c13): what a bare Ubuntu 24.04 lacks for P9, found by installing on one, and the static tmux build
   # (scripts/bare-machine.sh, which says what each step does). By hand only, with bare.
   bare:
