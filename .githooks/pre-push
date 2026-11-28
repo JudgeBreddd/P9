@@ -1,7 +1,9 @@
 #!/bin/sh
 set -eu
-# C2 (O287): the same checks CI's quick job runs first (licence inventory, scan with gitleaks).
-pnpm quick
+# C2 (O287): the checks CI's quick job runs first. The scan (gitleaks included) always; the licence inventory below, only
+# when the push changes pnpm-lock.yaml or the inventory: it compares against what is installed here, so a worktree with no or an older
+# install would refuse a branch that is fine. `pnpm quick` runs both by hand.
+node scripts/scan.mjs
 # Only the commits this push adds (git gives one "<local ref> <local sha> <remote ref> <remote sha>" line per ref): main's
 # old history already holds test fixtures and notes that name private paths (H3, 0.1.8), so a grep of all history could
 # never pass. Only added lines count (a fix removing such a line still shows it). A deleted ref adds nothing; a new ref is checked against everything the remote already has.
@@ -10,6 +12,9 @@ while read -r _ local _ remote; do
   [ "$local" = "$zero" ] && continue
   if [ "$remote" = "$zero" ]; then range="$local --not --remotes"; else range="$remote..$local"; fi
   gitleaks git . --redact --no-banner --log-opts="$range"
+  if git diff --name-only "$(git merge-base origin/main "$local")" "$local" | grep -qxE 'pnpm-lock\.yaml|dependency-licenses\.json'; then
+    node scripts/licenses.mjs
+  fi
   # Paths in added lines and commit messages, from the merge base with main (scripts/no-local-paths.mjs; the PR check runs it too).
   node scripts/no-local-paths.mjs --range "$(git merge-base origin/main "$local")..$local"
 done
