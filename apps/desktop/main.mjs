@@ -192,6 +192,7 @@ export async function createDesktop({ state, open } = {}) {
     if (request.method !== 'GET' || url.username || url.password || url.port || !data) return new Response('Not found', { status: 404 });
     return new Response(data, { headers: { 'Content-Type': types[path.extname(key)] ?? 'application/octet-stream', 'Content-Security-Policy': site.csp, 'X-Content-Type-Options': 'nosniff', 'Document-Policy': 'include-js-call-stacks-in-crash-reports' } });
   };
+  sites.chat = { get files() { return sites.app.files; }, csp: sites.app.csp.replace("frame-ancestors 'none'", 'frame-ancestors p9://dev p9://webview') }; // SPIKE o294
   protocol.handle('p9', serve('app', 'frame'));
   const name = await nameSoon;
   let settings = checkSettings(await settingsSoon.then(text => upgradeSettings(JSON.parse(text), name)).catch(() => null)) ?? { ...structuredClone(DEFAULT_SETTINGS), name };
@@ -553,7 +554,7 @@ export async function createDesktop({ state, open } = {}) {
   app.on('child-process-gone', (_event, details) => note(details.type + ' process gone: ' + details.reason));
   let persistent = true, stoppingBeforeQuit = false;
   ipcMain.handle('p9:lifecycle', async (event, action, payload) => {
-    if (event.sender !== window.webContents || event.senderFrame !== window.webContents.mainFrame || event.senderFrame.url !== APP_URL
+    if (!spikeShell(event)
         || action !== 'mode' || !payload || Object.keys(payload).join(',') !== 'persistent' || typeof payload.persistent !== 'boolean') throw new Error('ipc-sender-refused');
     persistent = payload.persistent;
     return { ok: true };
@@ -567,7 +568,7 @@ export async function createDesktop({ state, open } = {}) {
       .catch(() => {}).finally(() => app.quit());
   });
   ipcMain.handle('p9:get-status', async (event, ...args) => {
-    if (event.sender !== window.webContents || event.senderFrame !== window.webContents.mainFrame || event.senderFrame.url !== APP_URL || args.length) throw new Error('ipc-sender-refused');
+    if (!spikeShell(event) || args.length) throw new Error('ipc-sender-refused');
     // savedWorkspace: the saved folder was not there at the daemon's start, so it runs on the default (apps/server/main.mjs).
     // Server mode: mode and host for the title-bar badge; error says why it is not connected yet (remote.mjs codes).
     if (serverHost) {
@@ -598,14 +599,14 @@ export async function createDesktop({ state, open } = {}) {
     return { status: 'unavailable', reason };
   });
   ipcMain.handle('p9:usage', async (event, ...args) => {
-    if (event.sender !== window.webContents || event.senderFrame !== window.webContents.mainFrame || event.senderFrame.url !== APP_URL || args.length) throw new Error('ipc-sender-refused');
+    if (!spikeShell(event) || args.length) throw new Error('ipc-sender-refused');
     if (!state) return { status: 503, body: { state: 'unavailable' } };
     try { return await daemonRequest(state, 'GET', '/usage'); }
     catch { return { status: 503, body: { state: 'unavailable' } }; }
   });
   // A3 (2): the Usage window's Tokens and Cost tabs, one range of the route's (usage-turns.mjs RANGES) a call.
   ipcMain.handle('p9:usage-turns', async (event, ...args) => {
-    if (event.sender !== window.webContents || event.senderFrame !== window.webContents.mainFrame || event.senderFrame.url !== APP_URL
+    if (!spikeShell(event)
       || args.length !== 1 || ![1, 7, 30, 90].includes(args[0])) throw new Error('ipc-sender-refused');
     if (!state) return { status: 503, body: { state: 'unavailable' } };
     try { return await daemonRequest(state, 'GET', '/usage/turns?days=' + args[0]); }
@@ -615,7 +616,7 @@ export async function createDesktop({ state, open } = {}) {
   // this exact prefix (anymouse.mjs NEW_ISSUE) may open (in the user's browser). ponytail: P9_OPEN_URL swaps the browser for a test logger.
   ipcMain.handle('p9:anymouse', async (event, ...args) => {
     const [payload] = args;
-    if (event.sender !== window.webContents || event.senderFrame !== window.webContents.mainFrame || event.senderFrame.url !== APP_URL
+    if (!spikeShell(event)
         || args.length !== 1 || !payload || typeof payload !== 'object' || Array.isArray(payload)) throw new Error('ipc-sender-refused');
     if (!state) return { status: 503, body: { error: 'daemon-unavailable' } };
     let result;
@@ -634,7 +635,7 @@ export async function createDesktop({ state, open } = {}) {
   // output; D8: Codex's one-time code is shown, and only when it has exactly a code's shape.
   ipcMain.handle('p9:agent-login', async (event, ...args) => {
     const [action, agent, code] = args;
-    if (event.sender !== window.webContents || event.senderFrame !== window.webContents.mainFrame || event.senderFrame.url !== APP_URL
+    if (!spikeShell(event)
         || !['state', 'start', 'open', 'code', 'stop'].includes(action) || args.length !== (action === 'code' ? 3 : action === 'state' ? 1 : 2)
         || (action !== 'state' && (typeof agent !== 'string' || !Object.hasOwn(SIGN_IN_ORIGINS, agent)))) throw new Error('ipc-sender-refused');
     if (!state) return { status: 503, body: { error: 'daemon-unavailable' } };
@@ -732,7 +733,7 @@ export async function createDesktop({ state, open } = {}) {
   };
   ipcMain.handle('p9:mission', async (event, ...args) => {
     const [action, payload = {}] = args;
-    if (event.sender !== window.webContents || event.senderFrame !== window.webContents.mainFrame || event.senderFrame.url !== APP_URL
+    if (!spikeShell(event)
         || args.length > 2 || !Object.hasOwn(missionRoutes, action) || !payload || typeof payload !== 'object' || Array.isArray(payload)) throw new Error('ipc-sender-refused');
     const route = missionRoutes[action](payload);
     if (!route) return { status: 400, body: { error: 'request-refused' } };
@@ -765,7 +766,7 @@ export async function createDesktop({ state, open } = {}) {
   // The Mission edit form's Picture button (ME6, row 44): the native file picker, then the file's bytes for the form to send with its Save.
   // Nothing is written here; the daemon checks the bytes' type and size again and stores the file only after the guarded save's checks.
   ipcMain.handle('p9:pick-picture', async (event, ...args) => {
-    if (event.sender !== window.webContents || event.senderFrame !== window.webContents.mainFrame || event.senderFrame.url !== APP_URL || args.length) throw new Error('ipc-sender-refused');
+    if (!spikeShell(event) || args.length) throw new Error('ipc-sender-refused');
     const pick = await dialog.showOpenDialog(window, { title: 'Choose a picture', buttonLabel: 'Use picture', properties: ['openFile'],
       filters: [{ name: 'Pictures', extensions: ['png', 'jpg', 'jpeg', 'webp', 'ico', 'svg'] }] });
     if (pick.canceled || !pick.filePaths[0]) return null;
@@ -849,7 +850,7 @@ export async function createDesktop({ state, open } = {}) {
   const SPRINT_START_MS = 10 * 60_000; // ponytail: room for the lead's minute and about 20 workers' starts, not measured
   ipcMain.handle('p9:chat', async (event, ...args) => {
     const [action, payload = {}] = args;
-    if (event.sender !== window.webContents || event.senderFrame !== window.webContents.mainFrame || event.senderFrame.url !== APP_URL
+    if (!spikeShell(event)
         || args.length > 2 || !Object.hasOwn(chatRoutes, action) || !payload || typeof payload !== 'object' || Array.isArray(payload)) throw new Error('ipc-sender-refused');
     const { op, ...rest } = payload;
     const route = (op === undefined || uuid(op)) && chatRoutes[action](rest);
@@ -866,7 +867,7 @@ export async function createDesktop({ state, open } = {}) {
   // routes and socket the phone uses, over the daemon's desktop socket with the desktop's credentials, which the page never
   // holds. One socket at a time; frames pass through as they are (the page stamps keys with the daemon's leases, like the
   // phone) and the daemon checks every one. Each socket has a serial, so the page can tell a new socket's frames from an old one's.
-  const fromApp = event => event.sender === window.webContents && event.senderFrame === window.webContents.mainFrame && event.senderFrame.url === APP_URL;
+  const fromApp = event => spikeShell(event);
   // Test-only: the UI tests' sample data (test/sample-data.mjs), never in a packaged build (GitHub issue #4). JSON drops its helpers.
   const sample = !app.isPackaged && process.env.P9_SAMPLE_DATA === '1'
     ? JSON.parse(JSON.stringify((await import(new URL('../../test/sample-data.mjs', import.meta.url).href)).M)) : null;
@@ -1148,6 +1149,9 @@ export async function createDesktop({ state, open } = {}) {
     if (built === null || built !== devBuilt) { devBuild = null; devBuilt = built; }
     return devBuild ??= assets(devDist).catch(error => { devBuild = null; throw error; });
   };
+  // SPIKE o294: the shell's page in a workbench tab (p9://chat/ inside the dev view) counts as the shell.
+  function spikeShell(event) { return (event.sender === window.webContents && event.senderFrame === window.webContents.mainFrame && event.senderFrame.url === APP_URL)
+    || (!!devView && event.sender === devView.webContents && !!event.senderFrame?.url.startsWith('p9://chat/')); }
   const fromDev = event => devView && event.sender === devView.webContents && event.senderFrame === devView.webContents.mainFrame && isDevPage(event.senderFrame.url);
   // The quit handler exists before the host does, so a quit during startup still stops it. Synchronous: Electron does not
   // wait for promises on quit, and the host must not outlive the app. One handler for the current start (review item 24:
@@ -1216,7 +1220,7 @@ export async function createDesktop({ state, open } = {}) {
     // FIX2: a newer open (reopenDev) owns the page from here; an older one still running when it ends writes nothing.
     const mine = ++devGen, next = {};
     const devSession = session.fromPartition('persist:p9-dev');
-    if (!devSession.protocol.isProtocolHandled('p9')) devSession.protocol.handle('p9', serve('dev', 'webview'));
+    if (!devSession.protocol.isProtocolHandled('p9')) devSession.protocol.handle('p9', serve('dev', 'webview', 'chat'));
     // An extension page's files are asked for at https://*.vscode-cdn.net and answered by VS Code's service worker from the
     // editor host; a request that gets past it never leaves the machine.
     devSession.webRequest.onBeforeRequest({ urls: ['*://*.vscode-cdn.net/*'] }, (_details, callback) => callback({ cancel: true }));
@@ -1225,13 +1229,13 @@ export async function createDesktop({ state, open } = {}) {
     devSession.setPermissionRequestHandler((_contents, permission, callback) => callback(permission === 'clipboard-sanitized-write'));
     devSession.setPermissionCheckHandler((_contents, permission) => permission === 'clipboard-sanitized-write');
     devView = new WebContentsView({ webPreferences: { preload: fileURLToPath(new URL('./dev-preload.cjs', import.meta.url)), session: devSession, sandbox: true,
-      contextIsolation: true, nodeIntegration: false, webSecurity: true, allowRunningInsecureContent: false, webviewTag: false } });
+      contextIsolation: true, nodeIntegration: false, nodeIntegrationInSubFrames: true, webSecurity: true, allowRunningInsecureContent: false, webviewTag: false } });
     devView.setBackgroundColor('#05070e');
     devView.webContents.on('dom-ready', () => devView?.webContents.setZoomFactor(settings.zoom));
     devView.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
     devView.webContents.on('will-navigate', (event, url) => { if (!isDevPage(url)) event.preventDefault(); });
     // Subframes (the workbench's webviews) stay on p9://dev/ and p9://webview/; the CSP's frame-src says the same.
-    devView.webContents.on('will-frame-navigate', event => { if (!event.isMainFrame && !event.url.startsWith(DEV_URL) && !event.url.startsWith(WEBVIEW_URL) && !/^about:(blank|srcdoc)$/.test(event.url)) event.preventDefault(); });
+    devView.webContents.on('will-frame-navigate', event => { if (!event.isMainFrame && !event.url.startsWith(DEV_URL) && !event.url.startsWith(WEBVIEW_URL) && !event.url.startsWith('p9://chat/') && !/^about:(blank|srcdoc)$/.test(event.url)) event.preventDefault(); });
     devView.webContents.on('will-attach-webview', event => event.preventDefault());
     devView.webContents.on('render-process-gone', () => { dev = null; devReady = false; });
     // Ctrl/Alt+1/2/3 switch focus from inside the editor too: hand the key to the shell.
@@ -1259,7 +1263,7 @@ export async function createDesktop({ state, open } = {}) {
       const isWebview = name => /^\/assets\/(index-[^/]+\.html|fake-[^/]+\.html|service-worker-[^/]+\.js)$/.test(name);
       next.webview = { files: new Map([...devFiles].filter(([name]) => isWebview(name))), csp: "default-src 'none'; script-src 'self' 'unsafe-inline' https://*.vscode-cdn.net; "
         + "style-src 'self' 'unsafe-inline' https://*.vscode-cdn.net; img-src 'self' data: blob: https:; font-src 'self' data: https://*.vscode-cdn.net; "
-        + "media-src 'self' blob: https://*.vscode-cdn.net; connect-src 'self' https://*.vscode-cdn.net; worker-src 'self'; frame-src 'self'; "
+        + "media-src 'self' blob: https://*.vscode-cdn.net; connect-src 'self' https://*.vscode-cdn.net; worker-src 'self'; frame-src 'self' p9://chat; "
         + "object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors p9://dev p9://webview" };
       const devScripts = [...devFiles].filter(([name]) => name.endsWith('.html') && !isWebview(name)).flatMap(([, data]) => inlineHashes(data.toString('utf8')));
       next.dev = { files: devFiles, csp: `default-src 'none'; script-src 'self' 'wasm-unsafe-eval' ${devScripts.join(' ')}; worker-src 'self' blob:; style-src 'self' 'unsafe-inline'; `
@@ -1267,7 +1271,7 @@ export async function createDesktop({ state, open } = {}) {
         // (threat model row 5; A/B: with Open VSX only, all 5 of the YAML README's images stay blank). Gallery search, installs
         // and README text come through the editor host, so connect-src stays local.
         + `img-src 'self' data: blob: ${origin} https:; font-src 'self' data: blob: ${origin}; media-src 'self' blob:; connect-src 'self' ws://127.0.0.1:${host.port} ${origin}; `
-        + "frame-src 'self' p9://webview; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'self'" };
+        + "frame-src 'self' p9://webview p9://chat; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'self'" };
       // workspace is the guard root (the folder saves are relative to); folder is the one the editor shows.
       if (devFolder?.outside && (await daemonRequest(state, 'POST', '/dev/root', { path: devFolder.path }).catch(() => null))?.status !== 200) devFolder = null;
       next.serving = devFolder;
@@ -1367,7 +1371,7 @@ export async function createDesktop({ state, open } = {}) {
   });
   ipcMain.handle('p9:dev-view', async (event, ...args) => {
     const [b] = args, whole = value => Number.isSafeInteger(value) && value >= 0 && value <= 100000;
-    if (event.sender !== window.webContents || event.senderFrame !== window.webContents.mainFrame || event.senderFrame.url !== APP_URL
+    if (!spikeShell(event)
         || args.length !== 1 || !b || typeof b.visible !== 'boolean' || (b.visible && !['x', 'y', 'width', 'height'].every(key => whole(b[key])))) throw new Error('ipc-sender-refused');
     if (!b.visible) { devView?.setVisible(false); return { ok: true }; }
     const shown = devView?.getVisible();
@@ -1388,7 +1392,7 @@ export async function createDesktop({ state, open } = {}) {
   // would be under it. The shell asks for a still of the editor, shows it in the view's place, then hides the view while the menu
   // is open. Only the shell may ask; the still goes only to it.
   ipcMain.handle('p9:dev-still', async (event, ...args) => {
-    if (event.sender !== window.webContents || event.senderFrame !== window.webContents.mainFrame || event.senderFrame.url !== APP_URL || args.length) throw new Error('ipc-sender-refused');
+    if (!spikeShell(event) || args.length) throw new Error('ipc-sender-refused');
     if (!devView?.getVisible()) return null;
     const image = await devView.webContents.capturePage().catch(() => null);
     if (!image || image.isEmpty()) return null;
@@ -1399,7 +1403,7 @@ export async function createDesktop({ state, open } = {}) {
   cardsIpc(outer);
   // Settings: no argument reads them; one argument is the whole new shape, refused unless checkSettings takes it.
   ipcMain.handle('p9:settings', async (event, ...args) => {
-    if (event.sender !== window.webContents || event.senderFrame !== window.webContents.mainFrame || event.senderFrame.url !== APP_URL
+    if (!spikeShell(event)
         || args.length > 1) throw new Error('ipc-sender-refused');
     if (!args.length) return settings;
     const next = checkSettings(args[0]);
@@ -1422,7 +1426,7 @@ export async function createDesktop({ state, open } = {}) {
   // Setup's Pick buttons name a file ('setup-file') or folder ('setup-folder') the same way; the daemon checks the path again.
   const PICKS = { 'setup-file': ['Choose the file', 'Use this file', 'openFile'], 'setup-folder': ['Choose the folder', 'Use this folder', 'openDirectory'] };
   ipcMain.handle('p9:pick-folder', async (event, ...args) => {
-    if (event.sender !== window.webContents || event.senderFrame !== window.webContents.mainFrame || event.senderFrame.url !== APP_URL
+    if (!spikeShell(event)
         || args.length > 1 || (args.length && !Object.hasOwn(PICKS, args[0]))) throw new Error('ipc-sender-refused');
     if (!state) return null;
     // Server mode: this machine's dialog cannot browse the server. Setup's picks act as Cancel; a new chat's folder is
@@ -1578,7 +1582,7 @@ export async function createDesktop({ state, open } = {}) {
     return { rebuilt: true };
   });
   ipcMain.handle('p9:pet-remove', async (event, ...args) => {
-    if (event.sender !== window.webContents || event.senderFrame !== window.webContents.mainFrame || event.senderFrame.url !== APP_URL
+    if (!spikeShell(event)
         || args.length !== 1 || typeof args[0] !== 'string' || !PET_NAME.test(args[0])) throw new Error('ipc-sender-refused');
     const folder = path.join(petsFolder, args[0]), info = await lstat(folder).catch(() => null);
     if (!info?.isDirectory()) throw new Error('pet-refused'); // lstat: a link is never a directory here
@@ -1586,7 +1590,7 @@ export async function createDesktop({ state, open } = {}) {
     return { removed: args[0] };
   });
   ipcMain.handle('p9:open-docs', async (event, ...args) => {
-    if (event.sender !== window.webContents || event.senderFrame !== window.webContents.mainFrame || event.senderFrame.url !== APP_URL
+    if (!spikeShell(event)
         || args.length > 1 || (args.length && !GUIDE_SECTIONS.includes(args[0]))) throw new Error('ipc-sender-refused');
     const url = args.length ? GUIDE_URL + args[0] : DOCS_URL;
     if (process.env.P9_OPEN_URL) spawn(process.env.P9_OPEN_URL, [url], { shell: false, stdio: 'ignore' }).on('error', () => {});
@@ -1599,7 +1603,7 @@ export async function createDesktop({ state, open } = {}) {
     const answer = whatsNew; whatsNew = null; return answer;
   });
   ipcMain.handle('p9:open-updates', async (event, ...args) => {
-    if (event.sender !== window.webContents || event.senderFrame !== window.webContents.mainFrame || event.senderFrame.url !== APP_URL
+    if (!spikeShell(event)
         || args.length) throw new Error('ipc-sender-refused');
     if (process.env.P9_OPEN_URL) spawn(process.env.P9_OPEN_URL, [RELEASES_URL], { shell: false, stdio: 'ignore' }).on('error', () => {});
     else await shell.openExternal(RELEASES_URL);
@@ -1643,7 +1647,7 @@ export async function createDesktop({ state, open } = {}) {
     return { opened: true };
   });
   ipcMain.handle('p9:open-petdex', async (event, ...args) => {
-    if (event.sender !== window.webContents || event.senderFrame !== window.webContents.mainFrame || event.senderFrame.url !== APP_URL
+    if (!spikeShell(event)
         || args.length) throw new Error('ipc-sender-refused');
     if (process.env.P9_OPEN_URL) spawn(process.env.P9_OPEN_URL, [PETDEX_URL], { shell: false, stdio: 'ignore' }).on('error', () => {});
     else await shell.openExternal(PETDEX_URL);
@@ -1682,7 +1686,7 @@ export async function createDesktop({ state, open } = {}) {
   const LOOK_TOKENS = ['background', 'foreground', 'card', 'primary', 'primary-foreground', 'muted', 'muted-foreground', 'accent', 'border', 'ring'];
   ipcMain.handle('p9:look', (event, ...args) => {
     const [input] = args;
-    if (event.sender !== window.webContents || event.senderFrame !== window.webContents.mainFrame || event.senderFrame.url !== APP_URL || args.length !== 1
+    if (!spikeShell(event) || args.length !== 1
         || !input || typeof input.dark !== 'boolean' || !input.colors || Object.keys(input.colors).length !== LOOK_TOKENS.length
         || !LOOK_TOKENS.every(token => /^#[0-9a-f]{8}$/.test(input.colors[token] ?? ''))
         || (input.theme !== undefined && (typeof input.theme !== 'string' || !/^[a-z0-9-]{0,40}$/.test(input.theme)))) throw new Error('ipc-sender-refused');
