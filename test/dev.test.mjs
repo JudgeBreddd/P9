@@ -942,7 +942,8 @@ test('O294: no editor tab and the chat beside: the file list and the chat, no ed
   const seen = async name => {
     const { view } = await read(), src = (await dev.screenshot({ type: 'jpeg', quality: 80 })).toString('base64');
     await shell.evaluate(({ at, src }) => { const img = Object.assign(document.createElement('img'), { id: 'o294paste', src: 'data:image/jpeg;base64,' + src }); Object.assign(img.style, { position: 'fixed', left: at.x + 'px', top: at.y + 'px', width: at.width + 'px', height: at.height + 'px', zIndex: 99999 }); document.body.append(img); return img.decode(); }, { at: view, src });
-    await shot(shell, name);
+    // Saved, not printed like shot(): eight whole-window pictures in the log pushed this test's own result off its end.
+    if (evidence) { await mkdir(evidence, { recursive: true }); await writeFile(path.join(evidence, name + '.jpg'), await shell.screenshot({ type: 'jpeg', quality: 80 })); }
     await shell.evaluate(() => document.querySelector('#o294paste').remove());
   };
   const closeAll = () => dev.evaluate(() => window.devFocus.v.commands.executeCommand('workbench.action.closeAllEditors'));
