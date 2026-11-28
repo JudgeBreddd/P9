@@ -800,7 +800,9 @@ function placeDev() {
   }
   if (visible) devRect = { x: Math.round(x), y: Math.round(y), width: Math.round(Math.max(0, right - x)), height: Math.round(Math.max(0, bottom - y)) };
   // O294: only tells the editor page it is shown files-only; the answer carries what that page last said, for a shell loaded after it.
-  if (!devOnly()) devWide = null; // the next files-only starts from what the editor shows then
+  // A tab opened: the next files-only starts from what the editor shows then. A focus change, a dialog or a rebuilt page keeps
+  // the width: read back from the filled file list it came out 2 to 6 px wider each time (#581 r2, O293).
+  if (devFiles?.tabs) devWide = null;
   $('#devTab .stab').textContent = devOnly() ? 'Files' : 'Editor';
   return Promise.resolve(window.p9.devView(visible ? { visible, ...devRect, only: devOnly() } : { visible })).then(answer => {
     if (answer && 'files' in answer && JSON.stringify(answer.files) !== JSON.stringify(devFiles)) devFilesSaid(answer.files);

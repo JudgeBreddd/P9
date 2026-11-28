@@ -995,6 +995,10 @@ test('O294: no editor tab and the chat beside: the file list and the chat, no ed
   await seen('o294-7-palette');
   assert.ok(box.left >= 0 && box.right <= box.page && box.right - box.left >= 200, 'the palette is inside the view: ' + JSON.stringify(box));
   await dev.keyboard.press('Escape');
+  // #581 r2 (O293): leaving Dev Focus and coming back keeps the view's width to the pixel (it grew 2 to 6 px each time).
+  const kept = got.view.width;
+  await shell.keyboard.press('Control+1'); await sleep(300); await shell.keyboard.press('Control+2');
+  got = await until('after a focus round-trip', g => filesOnly(g) && g.list === start && g.view.width === kept);
   // A reloaded shell learns what the editor shows from main: still the file list and the chat.
   await shell.reload();
   await shellReady(shell);
