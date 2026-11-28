@@ -46,3 +46,13 @@ test('C1: node skips a quarantined name with the shards\' flag and runs it with 
   assert.deepEqual(ran('--test-skip-pattern'), ['a test beside it'], 'the shards skip the quarantined test and run the one beside it');
   assert.deepEqual(ran('--test-name-pattern'), [list[0].name], 'the quarantine shard runs only the quarantined test');
 });
+
+// #573 r1 blocker 3: a file's pattern holds only that file's entries, so a same-title test in another file still blocks.
+test('C1: `pattern <file>` names only that file\'s quarantined tests', () => {
+  const run = (...a) => execFileSync(process.execPath, [new URL('shard.mjs', import.meta.url).pathname, ...a], { encoding: 'utf8' }).trim();
+  assert.equal(run('pattern', 'test/shard.test.mjs'), '', 'a file with no entries gets no pattern');
+  for (const f of new Set(list.map((q) => q.file))) {
+    const re = new RegExp(run('pattern', f));
+    for (const q of list) assert.equal(re.test(q.name), q.file === f || list.some((o) => o.file === f && o.name === q.name), `${f}: ${q.name}`);
+  }
+});
