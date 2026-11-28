@@ -220,14 +220,17 @@ test('Phase 8: Dev Focus edits real files through the guarded save', { skip, tim
   await dev.waitForFunction(() => window.devFocusReady || document.querySelector('#status')?.textContent, null, { timeout: 120000 });
   assert.equal(await dev.locator('#status').textContent(), '');
   stage('const config = await dev.evalu'); // The view sits exactly over the shell's Dev pane (Playwright screenshots one WebContents, so this is the overlay's proof).
-  // It draws above the shell, so it leaves the cards' column free and hides while a dialog is open (the chat toast was missing in Dev).
+  // It draws above the shell and hides while a dialog is open (the chat toast was missing in Dev). Since 0.1.6 the cards float
+  // over it in their own overlay view, drawn after it, so the editor runs the pane's full width (O293).
   const pane = await shell.evaluate(() => { const r = document.querySelector('#fDev').getBoundingClientRect(), c = document.querySelector('#cards').getBoundingClientRect();
     return { x: Math.round(r.x), y: Math.round(r.y), height: Math.round(r.height), cardsLeft: c.height > 0 ? Math.round(c.left) : null, right: Math.round(r.right) }; });
   const devBounds = () => app.evaluate(({ BrowserWindow }) => { const child = BrowserWindow.getAllWindows()[0].contentView.children[0]; return { bounds: child.getBounds(), visible: child.getVisible() }; });
   const view = await devBounds();
   assert.ok(pane.cardsLeft !== null, 'the test profile shows cards (Set up)');
   assert.deepEqual({ x: view.bounds.x, y: view.bounds.y, height: view.bounds.height, visible: view.visible }, { x: pane.x, y: pane.y, height: pane.height, visible: true });
-  assert.ok(view.bounds.x + view.bounds.width <= pane.cardsLeft && view.bounds.x + view.bounds.width > pane.right - 400, 'editor stops short of the cards: ' + JSON.stringify({ view, pane }));
+  assert.equal(view.bounds.x + view.bounds.width, pane.right, 'the editor runs to the pane\'s right edge: ' + JSON.stringify({ view, pane }));
+  const overlay = await app.evaluate(({ BrowserWindow }) => { const c = BrowserWindow.getAllWindows()[0].contentView.children[1]; return c && { x: c.getBounds().x, visible: c.getVisible() }; });
+  assert.deepEqual(overlay, { x: pane.cardsLeft, visible: true }, 'the cards overlay shows above the editor, at the cards\' column');
   await shell.locator('#setBtn').click();
   await shell.waitForFunction(() => document.querySelector('#setDlg').open);
   await new Promise(resolve => setTimeout(resolve, 300));
@@ -801,10 +804,12 @@ test('Event Horizon Azure: Dev Focus paints the review fixture in the theme; fen
     shown.revealRange(shown.selection, v.TextEditorRevealType.AtTop);
     await new Promise(resolve => setTimeout(resolve, 400));
     const groups = [...document.querySelectorAll('.editor-group-container')], mine = groups.find(g => g.querySelector('.tab.active')?.textContent.includes(name)), other = groups.find(g => g !== mine);
-    const cursor = mine.querySelector('.cursor'), line = mine.querySelector('.tab.active > .tab-border-top-container');
+    // The focused editor's own cursor: a group can hold other editors' hidden ones (O293: width 0 on CI).
+    const cursors = [...mine.querySelectorAll('.cursor')], cursor = mine.querySelector('.monaco-editor.focused .cursor') ?? cursors[0], line = mine.querySelector('.tab.active > .tab-border-top-container');
     return { lang: document.documentElement.dataset.lang, cursor: getComputedStyle(cursor).backgroundColor, width: cursor.getBoundingClientRect().width,
       border: getComputedStyle(mine).outlineColor, other: getComputedStyle(other).outlineColor, tab: getComputedStyle(line).backgroundColor, tabHeight: line.getBoundingClientRect().height,
-      focused: mine.contains(document.activeElement) };
+      focused: mine.contains(document.activeElement),
+      ...(cursor.getBoundingClientRect().width === 2 ? {} : { cursors: cursors.map(c => ({ w: c.getBoundingClientRect().width, display: getComputedStyle(c).display, shown: getComputedStyle(c).visibility, style: c.getAttribute('style'), editor: c.closest('.monaco-editor')?.className })) }) };
   }, name);
   const inMd = await focus('README.md');
   await shot(dev, 'o17-dev-focus-markdown');

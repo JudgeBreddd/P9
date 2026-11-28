@@ -26,6 +26,10 @@ on:
       - 'LICENSES.md'
       - 'docs/guide.md'
       - 'third-party/**'
+  # O293: every night the whole suite on main with the editor host, so the Dev Focus tests a push run skips (they need it) go
+  # red within a day of a change that breaks them, not at the next run by hand. Not on every push: it slows each merge.
+  schedule:
+    - cron: '17 10 * * *'
   workflow_dispatch:
     inputs:
       files:
@@ -166,8 +170,8 @@ jobs:
       - run: pnpm build
       - run: pnpm exec playwright install --only-shell chromium
       # Dev Focus tests skip without the editor host; this installs it as the README does, pinned by SHA-256.
-      - name: Editor host (evidence runs)
-        if: inputs.evidence
+      - name: Editor host (evidence and nightly runs)
+        if: inputs.evidence || github.event_name == 'schedule'
         run: |
           curl -fsSL --retry 5 --retry-all-errors --retry-delay 10 -o /tmp/reh.tgz https://github.com/VSCodium/vscodium/releases/download/1.121.03429/vscodium-reh-linux-x64-1.121.03429.tar.gz
           echo "9b27e6957f7cca9b52686eb9866db131e75d37d180ea5ba0f6cdf44b799f75d9  /tmp/reh.tgz" | sha256sum -c -
