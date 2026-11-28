@@ -4,8 +4,8 @@
 export const WHATS_NEW = {
   version: '0.1.9-beta.18',
   changes: [
-    "Dev Focus: with the chat on and no file open, the chat sits right beside the file list, with no empty editor area between.",
-    "Dev Focus: opening a file brings the editor back at its earlier width; the divider sizes the file list while no file is open.",
+    "Dev Focus: with the chat on and no file open, the chat sits beside the file list, with no empty editor area.",
+    "Dev Focus: opening a file brings the editor back at its old width; with no file, the divider sizes the file list.",
     "Phone: a file closed or replaced while it was loading no longer shows Loaded.",
   ],
 };
