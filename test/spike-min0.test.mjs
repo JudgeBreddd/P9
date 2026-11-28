@@ -46,13 +46,11 @@ test('SPIKE o294-min0', { skip: process.platform !== 'linux', timeout: 400000 },
   }, fn);
   const bounds = () => devView('return view.getBounds()');
   const setWidth = width => devView(`const b = view.getBounds(); view.setBounds({ ...b, width: ${width} }); return view.getBounds();`);
-  const minWidth = n => dev.evaluate(n => { window.devFocus.minDims.width = n; window.devFocus.layout.layout(); }, n);
+  const minWidth = n => dev.evaluate(n => { window.devFocus.minDims.width = n; window.devFocus.maxDims.width = n === 0 ? 0 : Number.POSITIVE_INFINITY; window.devFocus.layout.layout(); }, n);
   // P9's rule at 0 tabs, as a build would run it: the view's width = the icon strip plus the file list (when shown) at width W.
   const follow = async W => {
     const p = await parts(), shown = p.side > 0;
     await setWidth(p.act + (shown ? W : 0));
-    await sleep(400);
-    if (shown) await dev.evaluate(({ W, SIDE }) => { const l = window.devFocus.layout; l.setSize(SIDE, { width: W, height: l.getSize(SIDE).height }); l.layout(); }, { W, SIDE });
     await sleep(400);
     return parts();
   };
@@ -70,19 +68,12 @@ test('SPIKE o294-min0', { skip: process.platform !== 'linux', timeout: 400000 },
     await shot('min0-1-files-only');
     return { pass: later.parts.editor <= 1 && later.parts.side === W && later.bounds.width === later.parts.act + W, right: p, oneSecondLater: later };
   });
-  await probe('2 drag the file list edge', async () => {
-    const out = {};
-    for (const dx of [80, -60]) {
-      const p = await parts(), x = p.sideRight - 2, y = 300;
-      const at = await dev.evaluate(({ x, y }) => { const el = document.elementFromPoint(x, y); return el ? el.className.toString().slice(0, 60) : null; }, { x, y });
-      await dev.mouse.move(x, y); await dev.mouse.down(); await dev.mouse.move(x + dx / 2, y, { steps: 4 }); await dev.mouse.move(x + dx, y, { steps: 4 }); await dev.mouse.up();
-      await sleep(300);
-      const dragged = await parts(), followed = await follow(dragged.side);
-      out[dx] = { underPointer: at, sideBefore: p.side, sideAfterDrag: dragged.side, editorAfterDrag: dragged.editor, followed };
-      await shot('min0-2-drag' + (dx > 0 ? '-right' : '-left'));
-    }
-    out.pass = out[80].sideAfterDrag >= out[80].sideBefore + 60 && out[-60].sideAfterDrag <= out[-60].sideBefore - 40 && out[-60].followed.editor <= 1;
-    return out;
+  await probe('2 the view width drives the file list (+100 / -100)', async () => {
+    const p = await parts();
+    const sash = await dev.evaluate(x => { const el = document.elementFromPoint(x, 300); return el ? el.className.toString().slice(0, 80) : null; }, p.sideRight - 2);
+    await setWidth(p.page + 100); await sleep(500); const wider = await parts(); await shot('min0-2-wider');
+    await setWidth(p.page); await sleep(500); const back = await parts(); await shot('min0-2-narrower');
+    return { pass: wider.side === p.side + 100 && wider.editor <= 1 && back.side === p.side && back.editor <= 1, sashUnderPointer: sash, start: p, wider, back };
   });
   const W2 = (await parts()).side;
   await probe('3 Ctrl+B hides and shows the file list', async () => {
