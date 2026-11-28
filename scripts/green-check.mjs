@@ -77,16 +77,12 @@ async function main() {
   const page = (route, key) => { const r = json(route), list = r[key] ?? [];
     if ((r.total_count ?? 0) > list.length) refuse(`item ${item}: ${route.split('?')[0]} has ${r.total_count} ${key}, more than one page of ${list.length}`);
     return list; };
-  // C3 (O288), #574 r1: only each workflow's newest run on the commit, per event, counts. Marking a draft ready cancels its
-  // run and starts another; reopening a PR runs it again. Run ids only grow, and a re-run keeps its id and shows its latest
-  // attempt. #574 r2: a run by hand (workflow_dispatch: named files, bare, evidence) diagnoses; it is not the commit's CI.
-  const newest = new Map();
-  for (const r of page(`repos/${repo}/actions/runs?head_sha=${commit}&per_page=100`, 'workflow_runs')) {
-    if (r.event === 'workflow_dispatch') continue;
-    const key = (r.workflow_id ?? r.name) + ' ' + r.event;
-    if (!newest.has(key) || newest.get(key).id < r.id) newest.set(key, r);
-  }
-  const runs = [...newest.values()];
+  // C3 (O288), #574 r3: every run on the commit counts and must be green, except two kinds. A cancelled run is a run
+  // replaced (marking a draft ready cancels its run and starts another). A run by hand (workflow_dispatch: named files,
+  // bare, evidence) diagnoses; it is not the commit's CI. So a red run from any PR or event refuses, the safe side: an old
+  // red run on the same commit needs a re-run (same id, latest attempt) or a new commit.
+  const runs = page(`repos/${repo}/actions/runs?head_sha=${commit}&per_page=100`, 'workflow_runs')
+    .filter((r) => r.event !== 'workflow_dispatch' && r.conclusion !== 'cancelled');
   if (!runs.length) refuse(`item ${item}: no CI run on ${commit.slice(0, 8)}`);
   const open = runs.filter((r) => r.status !== 'completed'), red = runs.filter((r) => r.status === 'completed' && r.conclusion !== 'success');
   if (open.length) refuse(`item ${item}: CI on ${commit.slice(0, 8)} is not complete (${open.map((r) => r.name).join(', ')})`);
@@ -103,10 +99,10 @@ async function main() {
   for (const t of tests) {
     const name = t.file + '::' + t.title;
     // ponytail: a ✖ line has no file, so a failure of the same title in any file refuses; the safe side.
-    const hits = seen.filter((s) => s.title.includes(t.title)), ok = hits.filter((s) => s.ok && s.file === t.file), bad = hits.filter((s) => !s.ok);
+    const hits = seen.filter((s) => s.title.includes(t.title)), ok = new Set(hits.filter((s) => s.ok && s.file === t.file).map((s) => s.title)), bad = hits.filter((s) => !s.ok);
     if (bad.length) refuse(`item ${item}: ${name} failed in CI (${bad.length} ✖ line${bad.length > 1 ? 's' : ''})`);
-    if (!ok.length) refuse(`item ${item}: ${name} has no passed line in CI on ${commit.slice(0, 8)}`);
-    if (ok.length > 1) refuse(`item ${item}: ${name} matches ${ok.length} passed lines; name it so it matches exactly one`);
+    if (!ok.size) refuse(`item ${item}: ${name} has no passed line in CI on ${commit.slice(0, 8)}`);
+    if (ok.size > 1) refuse(`item ${item}: ${name} matches ${ok.size} passed tests; name it so it matches exactly one`);
   }
   console.log(`green: item ${item}, ${tests.length} named test${tests.length > 1 ? 's' : ''} passed in CI on ${commit.slice(0, 8)}`);
 }
