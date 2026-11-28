@@ -59,7 +59,10 @@ test('CI runs shell-bundle alone after its shard, and a failure in either part f
     for (const c of calls.slice(1)) assert.ok(c === BUNDLE || QFILES.includes(c), `shard ${shard}: after its files, only alone files, one each: ${c}`);
     ran.push(...calls.flatMap((c) => c.split(' ')));
   }
-  assert.deepEqual(ran.sort(), all, 'every test file runs once across the 7 shards');
+  // C2 (O287): the convention tests run in the quick job instead.
+  const quick = execFileSync(process.execPath, ['test/shard.mjs', 'quick'], { cwd: root, encoding: 'utf8' }).trim().split(' ');
+  assert.ok(quick.length && quick.every((f) => all.includes(f) && !ran.includes(f)), `the quick tests run in no shard: ${quick}`);
+  assert.deepEqual([...ran, ...quick].sort(), all, 'every test file runs once: across the 7 shards or in quick');
 
   // A dispatched list (Run workflow with files): the same split.
   const named = { FILES: `test/shard.test.mjs ${BUNDLE} test/file-limit.test.mjs`, SHARD: '0' };

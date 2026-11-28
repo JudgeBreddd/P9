@@ -1,5 +1,6 @@
-# Runs P9's tests on GitHub's machines: every push that changes more than docs (O230: main too, so each merge gets its
-# own result and two PRs that pass alone but break main together show within minutes), or by hand
+# Runs P9's tests on GitHub's machines: every pull request (C3, O288: the branch merged with main, not the branch alone) and
+# every merge to main that changes more than docs (O230: so each merge gets its own result and two PRs that pass alone but
+# break main together show within minutes), or by hand
 # from Actions -> Tests -> Run workflow (optionally naming test files; bare runs the bare-machine install instead).
 # The repo is public, so the runs cost nothing. 0.1.8 F1: the Linux tests run as 7 shards at once (test/shard.mjs) and the
 # Windows-only tests in their own job here, so a push answers in under 10 minutes; the installers build on tags only
@@ -9,8 +10,15 @@
 name: Tests
 
 on:
+  # C3 (O288): a branch push alone runs nothing; its PR does. A draft PR runs only `quick`; marking it ready runs the rest, so
+  # keep a PR draft while building and during a fix round and mark it ready once per round.
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    # No paths filter here: a check that never reports would hold a Markdown-only PR forever once checks are required (C5).
+    # `quick` says whether the change needs the heavy jobs; a job it skips counts as passed.
   push:
-    # A push of only Markdown runs nothing, except the files tests read (README's editor pin, the licence notices).
+    branches: [main]
+    # A merge of only Markdown runs nothing, except the files tests read (README's editor pin, the licence notices).
     paths:
       - '**'
       - '!**.md'
@@ -51,9 +59,65 @@ concurrency:
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
+  # C2 (O287): what a machine can see in 2 minutes, before any shard or Windows job starts: astro check, the licence
+  # inventory, the scan (gitleaks included) and the convention tests (node test/shard.mjs quick). No build, no browser.
+  quick:
+    if: ${{ !inputs.bare }}
+    runs-on: ubuntu-26.04
+    timeout-minutes: 10
+    env:
+      GITLEAKS: 8.30.1
+      GITLEAKS_SHA256: 551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
+    outputs:
+      heavy: ${{ steps.changed.outputs.heavy }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      # A PR that changes only Markdown (not README.md, LICENSES.md or third-party/, which tests read) skips the heavy jobs.
+      # On a PR, HEAD is GitHub's merge of the branch into main and HEAD^1 is main, so the diff is the PR's own change.
+      - id: changed
+        env:
+          EVENT: ${{ github.event_name }}
+        run: |
+          heavy=true
+          if [ "$EVENT" = pull_request ]; then
+            files=$(git diff --name-only HEAD^1 HEAD)
+            if [ -n "$files" ] && ! grep -qv '\.md$' <<<"$files" && ! grep -qE '^(README\.md|LICENSES\.md|third-party/)' <<<"$files"; then heavy=false; fi
+          fi
+          echo "heavy=$heavy" >> "$GITHUB_OUTPUT"; echo "heavy jobs: $heavy"
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 26.10.0
+          cache: pnpm
+      - name: Gitleaks
+        run: |
+          curl -fsSL --retry 5 --retry-all-errors --retry-delay 10 -o /tmp/gl.tgz "https://github.com/gitleaks/gitleaks/releases/download/v$GITLEAKS/gitleaks_${GITLEAKS}_linux_x64.tar.gz"
+          echo "$GITLEAKS_SHA256  /tmp/gl.tgz" | sha256sum -c -
+          sudo tar -xzf /tmp/gl.tgz -C /usr/local/bin gitleaks
+      # Retried: a GitHub/npm 50x during install (Electron's zip comes from github.com) failed whole runs (2026-11-08 outage).
+      - run: for i in 1 2 3; do pnpm install --frozen-lockfile && exit 0; echo "install failed ($i of 3), retrying in 30 s"; sleep 30; done; exit 1
+        shell: bash
+      # Each check runs even when one before it failed, so one red names every problem. O232: dependency-licenses.json
+      # matches what is installed (Linux only: elsewhere optional platform packages read installed: false).
+      - name: Astro check
+        run: pnpm check
+      - name: Licence inventory
+        if: ${{ !cancelled() }}
+        run: node scripts/licenses.mjs
+      - name: Scan
+        if: ${{ !cancelled() }}
+        run: node scripts/scan.mjs
+      - name: Convention tests
+        if: ${{ !cancelled() }}
+        run: node scripts/with-tmp.mjs node --test --test-timeout=120000 --test-force-exit $(node test/shard.mjs quick)
+
   linux:
-    # On a push the inputs are empty: !inputs.bare is !null, true, so the tests run as before.
-    if: ${{ !inputs.bare && !inputs.windows }}
+    # On a push the inputs are empty: !inputs.bare is !null, true, so the tests run as before. C2/C3: after quick passes,
+    # when the change needs it, and not on a draft PR (on a push github.event.pull_request is null, so !draft is true).
+    needs: quick
+    if: ${{ !inputs.bare && !inputs.windows && needs.quick.outputs.heavy == 'true' && !github.event.pull_request.draft }}
     strategy:
       # One shard failing still finishes the others, so a red run names every failing file.
       fail-fast: false
@@ -145,12 +209,6 @@ jobs:
             run "${SKIP[@]}" $FILES || rc=$?
           done
           exit $rc
-      # O232: dependency-licenses.json matches what is installed, so an update PR that skips `node scripts/licenses.mjs --write`
-      # goes red. Linux only: elsewhere optional platform packages read installed: false and the inventory differs. One shard
-      # is enough; after the tests (and only once install worked), so a drifted file never hides a test result.
-      - name: Licence inventory
-        if: ${{ !cancelled() && matrix.shard == 0 && steps.install.outcome == 'success' }}
-        run: node scripts/licenses.mjs
       # The output the result rests on, kept on every run (a failure too), not only in the job log.
       - name: Test output
         if: always()
@@ -177,7 +235,8 @@ jobs:
   # C1 (O286): a test that fails on a commit that did not touch its code, twice in 7 days, is quarantined with an open row
   # (test/quarantine.json; the Linux shards skip it). Windows has its own fixed list here and no quarantine yet. Never retried.
   windows:
-    if: ${{ !inputs.bare && (!inputs.files || inputs.windows) }}
+    needs: quick
+    if: ${{ !inputs.bare && (!inputs.files || inputs.windows) && needs.quick.outputs.heavy == 'true' && !github.event.pull_request.draft }}
     strategy:
       fail-fast: false
       matrix:
