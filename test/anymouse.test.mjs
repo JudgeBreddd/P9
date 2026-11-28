@@ -114,9 +114,12 @@ test('Anymouse in the desktop on a refused token: the box explains, keeps the no
   const png = await page.locator('#amDlg').screenshot();
   if (!process.env.GITHUB_ACTIONS) console.log('P9_SHOT anymouse-refused-token ' + png.toString('base64'));
   await page.locator('#amWeb').click();
-  await page.locator('#amNote', { hasText: 'Opened GitHub' }).waitFor({ timeout: 10000 });
+  // GitHub issue #568 (O298): the whole note went to GitHub, so the box closes; the note is kept for a reopen.
+  await page.waitForFunction(() => !document.querySelector('#amDlg').open, null, { timeout: 10000 });
+  assert.match(await page.locator('#amNote').textContent(), /^Opened GitHub/);
+  assert.equal(await page.locator('#amWeb').evaluate((b) => b.hidden), true);
+  await page.locator('#amBtn').click();
   assert.equal(await page.locator('#amText').inputValue(), 'the save button eats my edits');
-  assert.equal(await page.locator('#amWeb').isHidden(), true);
   let url = '';
   for (let i = 0; i < 50 && !url; i++) { url = await readFile(opened, 'utf8').catch(() => ''); if (!url) await new Promise((r) => setTimeout(r, 100)); }
   assert.ok(url.startsWith(NEW_ISSUE), url);
