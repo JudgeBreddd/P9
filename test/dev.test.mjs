@@ -633,7 +633,7 @@ test('Dev Focus: Open Folder inside and outside the workspace', { skip, timeout:
 
   // A folder that holds the workspace is refused, and the open folder stays.
   await pick(instance.directory);
-  assert.deepEqual(await dev.evaluate(() => window.p9dev.openFolder()), { error: 'root-refused' });
+  assert.deepEqual(await dev.evaluate(() => window.p9dev.openFolder()), { error: 'root-refused', server: false }); // server: the refusal says whose rules refused (#468)
   assert.equal((await dev.evaluate(() => window.p9dev.config())).folder, outside);
 
   // p9 edit names a workspace file: Dev Focus goes back to the workspace and opens it there.
@@ -810,8 +810,8 @@ test('Event Horizon Azure: Dev Focus paints the review fixture in the theme; fen
   await shot(dev, 'o17-dev-focus-markdown');
   const inTs = await focus('main.ts');
   await shot(dev, 'o17-dev-focus-code');
-  assert.deepEqual(inMd, { lang: 'markdown', cursor: RGB.violet, width: 2, border: RGB.violetDim, other: RGB.subtle, tab: RGB.violetDim, tabHeight: 2, focused: true });
-  assert.deepEqual(inTs, { lang: 'code', cursor: RGB.azure, width: 2, border: RGB.azureDim, other: RGB.subtle, tab: RGB.azureDim, tabHeight: 2, focused: true });
+  assert.deepEqual(inMd, { lang: 'markdown', cursor: RGB.violet, width: 2, border: RGB.violetDim, other: RGB.subtle, tab: RGB.violetDim, tabHeight: 2, focused: true }, JSON.stringify(inMd));
+  assert.deepEqual(inTs, { lang: 'code', cursor: RGB.azure, width: 2, border: RGB.azureDim, other: RGB.subtle, tab: RGB.azureDim, tabHeight: 2, focused: true }, JSON.stringify(inTs));
   // The other languages § 4 names: Python, JSON, CSS and shell.
   const opened = async (name, first) => {
     await dev.evaluate(name => window.devFocus.open(name), name);

@@ -30,8 +30,8 @@ export function createSide({ el, stage, focus, signal, narrow = '(max-width: 719
   const apply = () => {
     const on = was = shown();
     el.hidden = !on;
-    stage.dataset.side = on ? edge() : '';
-    stage.dataset.sideMode = on ? mode() : '';
+    // #581 (O293): off removes them; an empty data-side still matched `.stage[data-side]`, so Dev's tab row showed with no side panel.
+    if (on) Object.assign(stage.dataset, { side: edge(), sideMode: mode() }); else { delete stage.dataset.side; delete stage.dataset.sideMode; }
     if (on) stage.style.setProperty('--side-w', width() + 'px'); else stage.style.removeProperty('--side-w');
     if (on) { title.textContent = cur.opts.title ?? ''; el.dataset.slot = cur.slot; }
     const w = on && mode() !== 'full' ? width() : 0;
