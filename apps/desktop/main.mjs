@@ -112,7 +112,7 @@ const isDevPage = url => url.split(/[?#]/)[0] === DEV_URL;
 
 export async function createDesktop({ state, open } = {}) {
   // outer: createDesktop's names that the modules split out of it (F9) read and set; getters and setters keep them live.
-  const outer = { get APP_URL() { return APP_URL; }, get cardsHide() { return cardsHide; }, set cardsHide(v) { cardsHide = v; },
+  const outer = { spikeShell: event => spikeShell(event), get APP_URL() { return APP_URL; }, get cardsHide() { return cardsHide; }, set cardsHide(v) { cardsHide = v; },
     get cardsItems() { return cardsItems; }, set cardsItems(v) { cardsItems = v; },
     get cardsView() { return cardsView; }, set cardsView(v) { cardsView = v; }, get devFolder() { return devFolder; },
     get devReady() { return devReady; }, set devReady(v) { devReady = v; }, get devServing() { return devServing; },

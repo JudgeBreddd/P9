@@ -69,31 +69,35 @@ test('SPIKE o294: the shell page in a workbench tab', { skip: process.platform !
   frame.on?.('console', () => {});
   await probe('bridge present', () => frame.evaluate(() => typeof window.p9?.chat));
   await probe('session (chat list from the daemon)', async () => (await until(() => frame.locator('#navList .row[data-chat="' + id + '"]').count().then(n => n > 0), 30000)) ? 'listed' : { listed: false, body: (await frame.evaluate(() => document.body.innerText.slice(0, 300))) });
+  await probe('boot (status bar texts)', () => frame.evaluate(() => [document.querySelector('#dataNote')?.textContent, document.querySelector('#daemonStatus')?.textContent]));
+  await probe('first-run walkthrough skipped', async () => { const skip = frame.getByRole('button', { name: 'Skip', exact: true }); if (!await skip.count()) return 'none'; await skip.first().click(); return 'skipped'; });
+  console.log('SPIKE logs so far: ' + JSON.stringify(logs.filter(l => !/EAI_AGAIN|ENOTFOUND|ECONNREFUSED/.test(l)).slice(0, 40)));
   await frame.evaluate(() => { window.__mark = 'kept'; });
   await shot(dev, 'spike-1-file-and-chat');
-  await probe('open the chat', async () => { await frame.locator('#nav .row[data-chat="' + id + '"]').click(); return (await until(() => frame.locator('.pane[data-id="' + id + '"] .composer textarea').isVisible(), 15000)) ? 'pane' : 'no pane'; });
+  await probe('open the chat', async () => { await frame.locator('#nav .row[data-chat="' + id + '"]').click({ timeout: 10000 }); return (await until(() => frame.locator('.pane[data-id="' + id + '"] .composer textarea').isVisible(), 15000)) ? 'pane' : 'no pane'; });
   const pane = frame.locator('.pane[data-id="' + id + '"]');
-  await probe('focus: click into the box, keys land there', async () => { await pane.locator('.composer textarea').click(); await dev.keyboard.type('spike'); return frame.evaluate(() => [document.activeElement?.tagName, document.activeElement?.value?.trim()]); });
+  await probe('focus: click into the box, keys land there', async () => { await pane.locator('.composer textarea').click({ timeout: 10000 }); await dev.keyboard.type('spike'); return frame.evaluate(() => [document.activeElement?.tagName, document.activeElement?.value?.trim()]); });
   await probe('send (Enter)', async () => { await dev.keyboard.press('Enter'); return (await until(async () => (await events(instance, id)).some(e => e.type === 'user' && e.data.text === 'spike'), 15000)) ? 'daemon got it' : 'not sent'; });
   await probe('streaming (reply shows in the tab)', async () => (await until(() => pane.innerText().then(text => text.includes('echo:spike')), 20000)) ? 'shown' : 'not shown');
   await probe('paperclip', async () => {
-    const chooser = dev.waitForEvent('filechooser', { timeout: 10000 });
-    await pane.locator('[data-attach]').click();
-    (await chooser).setFiles(path.join(instance.workspace, 'pic.png'));
+    const chooser = dev.waitForEvent('filechooser', { timeout: 10000 }).catch(error => error);
+    await pane.locator('[data-attach]').click({ timeout: 10000 });
+    const got = await chooser; if (got instanceof Error) return 'no file chooser: ' + got.message.split('\n')[0];
+    await got.setFiles(path.join(instance.workspace, 'pic.png'));
     return (await until(() => pane.locator('.attach .att').count().then(n => n > 0), 10000)) ? 'attached' : 'not attached';
   });
   await probe('paste an image (Ctrl+V)', async () => {
     const before = await pane.locator('.attach .att').count();
     await app.evaluate(({ clipboard, nativeImage }, png) => clipboard.writeImage(nativeImage.createFromDataURL('data:image/png;base64,' + png)), PNG);
-    await pane.locator('.composer textarea').click(); await dev.keyboard.press('Control+V');
+    await pane.locator('.composer textarea').click({ timeout: 10000 }); await dev.keyboard.press('Control+V');
     return (await until(() => pane.locator('.attach .att').count().then(n => n > before), 10000)) ? 'attached' : 'not attached (' + before + ' before)';
   });
   await probe('desktop bridge call (getStatus)', () => frame.evaluate(() => window.p9.getStatus().then(r => 'answered: ' + Object.keys(r ?? {}).slice(0, 6).join(','), e => 'refused: ' + e.message)));
-  await probe('Ctrl+P from the chat box opens quick open', async () => { await pane.locator('.composer textarea').click(); await dev.keyboard.press('Control+P'); await sleep(800);
+  await probe('Ctrl+P from the chat box opens quick open', async () => { await pane.locator('.composer textarea').click({ timeout: 10000 }); await dev.keyboard.press('Control+P'); await sleep(800);
     const open = await dev.evaluate(() => { const w = document.querySelector('.quick-input-widget'); return !!w && getComputedStyle(w).display !== 'none'; }); await dev.keyboard.press('Escape'); return open; });
   await probe('F1 from the file opens the palette over the chat', async () => { await dev.evaluate(() => window.devFocus.v.commands.executeCommand('workbench.action.focusFirstEditorGroup')); await dev.keyboard.press('F1'); await sleep(800);
     const open = await dev.evaluate(() => { const w = document.querySelector('.quick-input-widget'); return !!w && getComputedStyle(w).display !== 'none'; }); await shot(dev, 'spike-palette'); await dev.keyboard.press('Escape'); return open; });
-  await probe('Ctrl+1 from the chat box switches focus', async () => { await pane.locator('.composer textarea').click(); await dev.keyboard.press('Control+1'); await sleep(800);
+  await probe('Ctrl+1 from the chat box switches focus', async () => { await pane.locator('.composer textarea').click({ timeout: 10000 }); await dev.keyboard.press('Control+1'); await sleep(800);
     const focus = await shell.evaluate(() => document.querySelector('.shell')?.dataset.focus); await shell.keyboard.press('Control+2'); await sleep(1500); return focus; });
   await probe('groups with file + chat', groups);
   // Close the file's last tab: closeEmptyGroups removes its column and the chat's column fills the space.

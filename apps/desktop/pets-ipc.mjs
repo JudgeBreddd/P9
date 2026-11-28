@@ -8,7 +8,7 @@ import os from 'node:os';
 export function petsIpc(outer) {
   // Pets: no argument lists the usable ones (name and display name only); one argument is a folder name to load.
   ipcMain.handle('p9:pets', async (event, ...args) => {
-    if (event.sender !== outer.window.webContents || event.senderFrame !== outer.window.webContents.mainFrame || event.senderFrame.url !== outer.APP_URL
+    if (!outer.spikeShell(event)
         || args.length > 1) throw new Error('ipc-sender-refused');
     if (args.length) return (await loadPet(outer.petsFolder, args[0])) ?? Promise.reject(new Error('pet-refused'));
     const names = (await readdir(outer.petsFolder).catch(() => [])).filter(name => PET_NAME.test(name)).sort().slice(0, 50);
@@ -35,7 +35,7 @@ export function petsIpc(outer) {
     return { added, refused };
   };
   ipcMain.handle('p9:pet-import', async (event, ...args) => {
-    if (event.sender !== outer.window.webContents || event.senderFrame !== outer.window.webContents.mainFrame || event.senderFrame.url !== outer.APP_URL
+    if (!outer.spikeShell(event)
         || args.length) throw new Error('ipc-sender-refused');
     return addFolders(await importable());
   });
@@ -49,7 +49,7 @@ export function petsIpc(outer) {
   };
   const asset = (rel, base) => { const u = new URL(rel, base + '/'); if (u.protocol !== 'https:' || u.hostname !== 'assets.petdex.dev') throw new Error('host'); return u.href; };
   ipcMain.handle('p9:pet-install', async (event, ...args) => {
-    if (event.sender !== outer.window.webContents || event.senderFrame !== outer.window.webContents.mainFrame || event.senderFrame.url !== outer.APP_URL
+    if (!outer.spikeShell(event)
         || args.length !== 1 || typeof args[0] !== 'string' || args[0].length > 300) throw new Error('ipc-sender-refused');
     // The words after the last "install" (or all of them), each a pet name; split, not one regex (a nested one froze main on a long typo).
     const words = args[0].trim().split(/\s+/), tail = words.slice(words.lastIndexOf('install') + 1);
@@ -77,7 +77,7 @@ export function petsIpc(outer) {
   });
   // Add: no argument; the user picks folders in the native picker (it opens where the petdex command installs). Remove: one pet name.
   ipcMain.handle('p9:pet-add', async (event, ...args) => {
-    if (event.sender !== outer.window.webContents || event.senderFrame !== outer.window.webContents.mainFrame || event.senderFrame.url !== outer.APP_URL
+    if (!outer.spikeShell(event)
         || args.length) throw new Error('ipc-sender-refused');
     let petdex = app.getPath('home');
     for (const folder of petdexFolders()) if ((await stat(folder).catch(() => null))?.isDirectory()) { petdex = folder; break; }

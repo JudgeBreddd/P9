@@ -30,7 +30,7 @@ export function cardsIpc(outer) {
   };
   ipcMain.handle('p9:cards', (event, ...args) => {
     const [c] = args, whole = value => Number.isSafeInteger(value) && value >= 0 && value <= 100000;
-    if (event.sender !== outer.window.webContents || event.senderFrame !== outer.window.webContents.mainFrame || event.senderFrame.url !== outer.APP_URL
+    if (!outer.spikeShell(event)
         || args.length !== 1 || !c || typeof c.visible !== 'boolean'
         || (c.visible && (!['x', 'y', 'width'].every(key => whole(c[key])) || !Array.isArray(c.items) || c.items.length > 8
           || !c.items.every(i => i && text(i.key, 300) && text(i.title, 200) && text(i.sub, 300) && (i.n === undefined || whole(i.n)))))) throw new Error('ipc-sender-refused');
