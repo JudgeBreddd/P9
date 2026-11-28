@@ -2859,6 +2859,8 @@ async function openFile(path: string, root?: string) {
     online(); syncSave();
     return true;
   } catch (error) {
+    // #578 r2 (O293): the file changed while the editor loaded; the status belongs to the file now open, so leave it.
+    if ((error as Error).message === 'file-changed') return false;
     // Binary, oversize, symlinked or locked files are refused by the daemon (request-refused); say so instead of "Unavailable".
     one('#fileState').textContent = (error as Error).message === 'request-refused' ? 'Cannot open this file here' : 'File unavailable';
     return false;
