@@ -157,8 +157,8 @@ test('green check: any red or cancelled run on the commit refuses, even a differ
   const cancelled = { ...green, id: 2, conclusion: 'cancelled' }, red = { ...green, id: 2, conclusion: 'failure' };
   const jobsOf = { 1: [{ id: 11, name: 'linux (0)', conclusion: 'success' }], 2: [{ id: 21, name: 'linux (0)', conclusion: 'success' }] };
   // A cancelled run before or after a green one (a draft made ready mid-run, a cancelled ready run), or another workflow's.
-  refused(run({ runs: [cancelled, green], jobsOf, logs: { 11: LOG, 21: LOG } }), 'is not green (Tests cancelled); re-run it: gh run rerun 2');
-  refused(run({ runs: [green, { ...cancelled, id: 0 }], jobsOf: { ...jobsOf, 0: [] }, logs: { 11: LOG } }), 'is not green (Tests cancelled); re-run it: gh run rerun 0');
+  refused(run({ runs: [cancelled, green], jobsOf, logs: { 11: LOG, 21: LOG } }), 'is not green (Tests cancelled); re-run it: gh run rerun 2 -R o/r');
+  refused(run({ runs: [green, { ...cancelled, id: 0 }], jobsOf: { ...jobsOf, 0: [] }, logs: { 11: LOG } }), 'is not green (Tests cancelled); re-run it: gh run rerun 0 -R o/r');
   refused(run({ runs: [green, { ...cancelled, id: 3, name: 'scan', workflow_id: 9 }], jobsOf: { ...jobsOf, 3: [] }, logs: { 11: LOG } }), 'is not green (scan cancelled)');
   // The same head on two PRs: a green run for the other PR does not hide this PR's red run, in either order.
   refused(run({ runs: [red, green], jobsOf, logs: { 11: LOG, 21: LOG } }), 'is not green (Tests failure)');

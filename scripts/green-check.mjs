@@ -84,7 +84,7 @@ async function main() {
   if (!runs.length) refuse(`item ${item}: no CI run on ${commit.slice(0, 8)}`);
   const open = runs.filter((r) => r.status !== 'completed'), red = runs.filter((r) => r.status === 'completed' && r.conclusion !== 'success');
   if (open.length) refuse(`item ${item}: CI on ${commit.slice(0, 8)} is not complete (${open.map((r) => r.name).join(', ')})`);
-  if (red.length) refuse(`item ${item}: CI on ${commit.slice(0, 8)} is not green (${red.map((r) => r.name + ' ' + r.conclusion).join(', ')})${red.some((r) => r.conclusion === 'cancelled') ? '; re-run it: gh run rerun ' + red.filter((r) => r.conclusion === 'cancelled').map((r) => r.id).join(' and gh run rerun ') : ''}`);
+  if (red.length) refuse(`item ${item}: CI on ${commit.slice(0, 8)} is not green (${red.map((r) => r.name + ' ' + r.conclusion).join(', ')})${red.some((r) => r.conclusion === 'cancelled') ? '; re-run it: ' + red.filter((r) => r.conclusion === 'cancelled').map((r) => `gh run rerun ${r.id} -R ${repo}`).join(' and ') : ''}`);
   const seen = [];
   for (const r of runs) for (const j of page(`repos/${repo}/actions/runs/${r.id}/jobs?per_page=100`, 'jobs')) {
     // C1 (O286): the quarantine shard is advisory (it never blocks), so its lines are no evidence either way.
