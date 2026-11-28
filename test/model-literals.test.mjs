@@ -149,8 +149,8 @@ test('R8 review r2: only code and JSON are read; a shell, CSS or HTML file is ou
 
 test('R8 review r3: a BOM or a broken JSON fixture does not crash the check; its names still count', () => {
   const text = {
-    'test/fixtures/bom.json': '﻿{"space":"\\u00a0"}',
-    'test/fixtures/bom-name.json': '﻿{"model":"opus"}',
+    'test/fixtures/bom.json': '\uFEFF{"space":"\\u00a0"}',
+    'test/fixtures/bom-name.json': '\uFEFF{"model":"opus"}',
     'test/fixtures/broken.json': '{"model": "sonnet",,, "x": ',
   };
   assert.deepEqual(modelCounts(Object.keys(text), (f) => text[f]), { 'test/fixtures/bom-name.json': 1, 'test/fixtures/broken.json': 1 });
