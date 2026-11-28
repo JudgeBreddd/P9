@@ -1550,12 +1550,17 @@ const amSendNote = async (browser) => {
   amSend.disabled = true; amNote.textContent = '';
   try {
     if (!window.p9?.anymouse) throw new Error('Anymouse needs the desktop app');
-    const r = await window.p9.anymouse({ kind: amKind, text: amText.value.trim(), page: S.focus, ...(browser ? { browser } : {}) });
+    const sent = amText.value;
+    const r = await window.p9.anymouse({ kind: amKind, text: sent.trim(), page: S.focus, ...(browser ? { browser } : {}) });
     amWeb.hidden = r.body?.refused !== true;
     if (r.status !== 200) throw new Error(r.body?.error ?? "couldn't send (" + r.status + ')');
     // Opened in the browser: the note stays to copy until the issue is filed there (GitHub issue #4 item 6).
-    if (!r.body.opened) amText.value = '';
+    // #579 r2: filed by the token, the box empties, unless the note changed while it went (what was typed since stays).
+    if (!r.body.opened && amText.value === sent) amText.value = '';
     amNote.textContent = r.body.opened ? 'Opened GitHub in your browser: finish the issue there. Your note is still here to copy.' + (r.body.cut ? ' It was too long for a link, so GitHub got only the start' + (r.body.kept ? ' (the first ' + r.body.kept.toLocaleString('en-US') + ' of ' + r.body.total.toLocaleString('en-US') + ' characters)' : '') + '; paste the rest from here.' : '') : 'Sent as issue #' + r.body.number + '. Thanks.';
+    // GitHub issue #568 (O298): GitHub got the whole note, so the box closes (the text stays for a reopen). A cut note
+    // keeps the box open: the rest is pasted from it. #579 r1: so does a note changed while GitHub opened (still being typed).
+    if (r.body.opened && !r.body.cut && amText.value === sent) amDlg.close();
   } catch (err) { amNote.textContent = err.message; }
   finally { amCheck(); }
 };

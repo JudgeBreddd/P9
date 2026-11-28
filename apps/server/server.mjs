@@ -1,6 +1,6 @@
 import { createServer } from 'node:http';
 import { execFile } from 'node:child_process';
-import { readdir, readFile as readAsset, writeFile, rename, stat, access, mkdir, open, realpath, link, unlink } from 'node:fs/promises';
+import { readdir, readFile as readAsset, writeFile, rename, stat, lstat, access, mkdir, open, realpath, link, unlink } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -11,7 +11,7 @@ import { bodyLimit } from 'hono/body-limit';
 import { getRequestListener } from '@hono/node-server';
 import { WebSocketServer } from 'ws';
 import { ORIGIN, MAX_BYTES, PUBLIC_ROUTES, FRAME_CSP, parseSave, SIGN_IN_ORIGINS, DEVICE_CODE, signInUrl } from '../../packages/protocol/index.mjs';
-import { readFile as readWorkspaceFile, readImage as readWorkspaceImage, listDirectory, guardedSave, createFile, createDirectory, setProtection, protection, guardFolders, isGuarded, HEAVY, WALK_SKIP } from '../../packages/files/index.mjs';
+import { readFile as readWorkspaceFile, readImage as readWorkspaceImage, listDirectory, guardedSave, createFile, createDirectory, setProtection, protection, pathAllowed, guardFolders, isGuarded, HEAVY, WALK_SKIP } from '../../packages/files/index.mjs';
 import { createXfer } from './xfer.mjs';
 import { createUpdate, toolPath } from './update.mjs';
 import { childEnv, TOOL_NAMES } from './child-env.mjs';
@@ -494,6 +494,25 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
     return reply(c, done.error ? { status: 409, ...done } : { status: 200, spaceName: name });
   });
   // New idea: one new file in _ideas/ (or _ideas/needs-done/), named as workspace-hub's new_idea names it; never replaces one.
+  // GitHub issue #572 (O299): with no _ideas/ at the root, the one folder down that has one (notes/_ideas, with the workspace
+  // one folder above notes). Two or more are named in the 404, not guessed. #579 r1-r2: only a folder createFile accepts
+  // counts: a path the writer's rules allow (pathAllowed: no ':' or '\\', no locked name such as _private or .git while File
+  // protection is on), no link at any level (lstat), not a guarded folder; and none a workspace walk leaves out (WALK_SKIP,
+  // dot folders), so an archive's _ideas never makes a second one.
+  const ideasFolder = async () => {
+    const usable = async (relative) => {
+      if (!pathAllowed(relative + '/x.md')) return false;
+      let at = workspace;
+      for (const part of relative.split('/')) { at = path.join(at, part); if (!await lstat(at).then((s) => s.isDirectory(), () => false)) return false; }
+      return !isGuarded(at);
+    };
+    if (await usable('_ideas')) return '_ideas';
+    const found = [];
+    for (const entry of await readdir(workspace, { withFileTypes: true }).catch(() => [])) {
+      if (entry.isDirectory() && !entry.name.startsWith('.') && !WALK_SKIP.includes(entry.name) && await usable(entry.name + '/_ideas')) found.push(entry.name + '/_ideas');
+    }
+    return found.length === 1 ? found[0] : found.sort();
+  };
   api.post('/mission/idea', async (c) => {
     const { name, text, needs_done: needsDone } = (await json(c)) ?? {};
     if (typeof name !== 'string' || typeof text !== 'string' || typeof needsDone !== 'boolean' || name.length > 200) return reply(c, { status: 400, error: 'invalid-idea' });
@@ -502,7 +521,9 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
     const slug = base.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 120);
     if (!slug) return reply(c, { status: 400, error: 'give it a name' });
     const file = `${slug}.${ext.toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 10) || 'md'}`;
-    const relative = ['_ideas', ...(needsDone ? ['needs-done'] : []), file].join('/');
+    const ideas = await ideasFolder();
+    if (Array.isArray(ideas)) return reply(c, { status: 404, error: ideas.length ? 'more than one _ideas folder: ' + ideas.join(', ') : 'no _ideas folder' });
+    const relative = [ideas, ...(needsDone ? ['needs-done'] : []), file].join('/');
     try { await createFile(workspace, relative, text.trimEnd() + '\n'); }
     catch (error) {
       if (error.code === 'EEXIST') return reply(c, { status: 409, error: `${file} already exists` });
