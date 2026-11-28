@@ -77,11 +77,13 @@ async function main() {
   const page = (route, key) => { const r = json(route), list = r[key] ?? [];
     if ((r.total_count ?? 0) > list.length) refuse(`item ${item}: ${route.split('?')[0]} has ${r.total_count} ${key}, more than one page of ${list.length}`);
     return list; };
-  // C3 (O288), #574 r1: only each workflow's newest run on the commit counts. Marking a draft ready cancels its run and
-  // starts another; reopening a PR runs it again. Run ids only grow, and a re-run keeps its id and shows its latest attempt.
+  // C3 (O288), #574 r1: only each workflow's newest run on the commit, per event, counts. Marking a draft ready cancels its
+  // run and starts another; reopening a PR runs it again. Run ids only grow, and a re-run keeps its id and shows its latest
+  // attempt. #574 r2: a run by hand (workflow_dispatch: named files, bare, evidence) diagnoses; it is not the commit's CI.
   const newest = new Map();
   for (const r of page(`repos/${repo}/actions/runs?head_sha=${commit}&per_page=100`, 'workflow_runs')) {
-    const key = r.workflow_id ?? r.name;
+    if (r.event === 'workflow_dispatch') continue;
+    const key = (r.workflow_id ?? r.name) + ' ' + r.event;
     if (!newest.has(key) || newest.get(key).id < r.id) newest.set(key, r);
   }
   const runs = [...newest.values()];

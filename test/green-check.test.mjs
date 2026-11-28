@@ -164,3 +164,15 @@ test('green check reads only the newest run of each workflow on the commit: a ca
   refused(run({ runs: [{ ...runs[1], id: 1 }, { ...runs[0], id: 2 }], jobsOf: { 1: jobsOf[2], 2: jobsOf[1] }, logs: { 21: LOG } }), 'is not green (Tests cancelled)');
   refused(run({ runs: [...runs, { id: 3, name: 'Pull request checks', workflow_id: 8, status: 'completed', conclusion: 'failure' }], jobsOf: { ...jobsOf, 3: [] }, logs: { 21: LOG } }), 'is not green (Pull request checks failure)');
 });
+
+// #574 round 2 blocker: a run by hand (workflow_dispatch: named files, bare, evidence) shares the Tests workflow with the PR's
+// run. It diagnoses; it is not the PR's CI, so it neither replaces the PR's run nor adds to it.
+test('green check ignores runs by hand: a green named run after red PR CI refuses, a bare run after green PR CI passes', () => {
+  const pr = { id: 1, name: 'Tests', workflow_id: 7, event: 'pull_request', status: 'completed', conclusion: 'success' };
+  const byHand = { id: 2, name: 'Tests', workflow_id: 7, event: 'workflow_dispatch', status: 'completed', conclusion: 'success' };
+  const jobsOf = { 1: [{ id: 11, name: 'linux (0)', conclusion: 'failure' }], 2: [{ id: 21, name: 'linux (0)', conclusion: 'success' }] };
+  refused(run({ runs: [{ ...pr, conclusion: 'failure' }, byHand], jobsOf, logs: { 11: LOG, 21: LOG } }), 'is not green (Tests failure)');
+  const bare = run({ runs: [pr, byHand], jobsOf: { 1: [{ id: 11, name: 'linux (0)', conclusion: 'success' }], 2: [{ id: 21, name: 'bare (x64)', conclusion: 'success' }] }, logs: { 11: LOG, 21: 'bare install ok' } });
+  assert.equal(bare.status, 0, bare.out);
+  refused(run({ runs: [byHand], jobsOf, logs: { 21: LOG } }), 'no CI run on abcdef12');
+});

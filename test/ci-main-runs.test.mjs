@@ -61,6 +61,8 @@ test('C3: every PR runs Tests (no paths filter), a draft runs only quick, and ma
   }
   // #574 r1 blocker 2: quick's tests write the shards' P9_PASS lines, so a plan row naming one can pass the sprint gate.
   const quick = block('quick', 2).join('\n');
+  // #574 r2: a run by hand naming files skips quick, so those tests start at once.
+  assert.ok(quick.includes('if: ${{ !inputs.bare && !inputs.files }}'), quick);
   assert.match(quick, /--test-reporter=\.\/test\/file-limit\.mjs --test-reporter-destination=stderr \$\(node test\/shard\.mjs quick\)/, quick);
   const [x, y] = [run('refs/pull/7/merge', 301), run('refs/pull/7/merge', 302)];
   assert.equal(x.cancel, 'true', 'a new push to a PR cancels the run it replaces');
