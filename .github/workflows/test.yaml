@@ -317,6 +317,28 @@ jobs:
           retention-days: 14
           if-no-files-found: warn
 
+  # C5 (O290): the one check GitHub requires on main (.github/ruleset-main.json, with R5's `review`). A required check must
+  # report on every PR, but a matrix job that is skipped reports once under its bare name (`linux`, not `linux (0)`), so
+  # naming the shards would hold every PR whose heavy jobs skip forever. This job waits for quick and the heavy jobs and
+  # passes when quick passed and each heavy job passed or was skipped (the quarantine shard cannot fail it). A run by hand
+  # names it differently, so a dispatched run on a PR's head never adds a `tests` result to that commit.
+  tests:
+    name: ${{ github.event_name == 'workflow_dispatch' && 'tests (by hand)' || 'tests' }}
+    needs: [quick, linux, windows]
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Quick passed; each heavy job passed or was skipped
+        env:
+          QUICK: ${{ needs.quick.result }}
+          LINUX: ${{ needs.linux.result }}
+          WINDOWS: ${{ needs.windows.result }}
+        run: |
+          echo "quick $QUICK, linux $LINUX, windows $WINDOWS"
+          [ "$QUICK" = success ] || { echo "quick did not pass"; exit 1; }
+          for r in "$LINUX" "$WINDOWS"; do case "$r" in success|skipped) ;; *) echo "a heavy job ended $r"; exit 1;; esac; done
+
   # Item 15 (v0.1.6 c13): what a bare Ubuntu 24.04 lacks for P9, found by installing on one, and the static tmux build
   # (scripts/bare-machine.sh, which says what each step does). By hand only, with bare.
   bare:
