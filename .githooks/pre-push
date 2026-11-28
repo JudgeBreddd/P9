@@ -1,6 +1,6 @@
 #!/bin/sh
 set -eu
-# C2 (O287): the same checks CI's quick job runs first (astro check, licence inventory, scan with gitleaks).
+# C2 (O287): the same checks CI's quick job runs first (licence inventory, scan with gitleaks).
 pnpm quick
 # Only the commits this push adds (git gives one "<local ref> <local sha> <remote ref> <remote sha>" line per ref): main's
 # old history already holds test fixtures and notes that name private paths (H3, 0.1.8), so a grep of all history could
