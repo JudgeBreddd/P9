@@ -214,7 +214,9 @@ The exact contextBridge allowlist is p9.getStatus(), p9.usage() (since phase 11;
 p9.chat(action, payload), p9.lifecycle(action, payload), since phase 13 p9.anymouse(note) (the daemon files the note, or
 returns GitHub's prefilled new-issue page, which the main process opens only if it starts with
 https://github.com/JudgeBreddd/p9/issues/new?), and since phase 8 p9.devView(bounds) (places the editor view over
-the Dev pane; integers only), p9.onFocus(callback) (receives chat/dev/mission) and p9.pickFolder() (no arguments; opens
+the Dev pane; integers only, plus one true/false saying the view is shown files-only, which main passes to the editor page;
+its answer and p9.onDevFiles(callback) carry three whole numbers the editor page said about its own layout: open tabs, the
+file list's width and the width beside it), p9.onFocus(callback) (receives chat/dev/mission) and p9.pickFolder() (no arguments; opens
 the system folder dialog and returns only a workspace-relative folder whose real path is inside the workspace, threat
 model row 24). Since phases 18-19 also: p9.look(look), p9.getSettings() and p9.setSettings(settings), p9.openDocs(),
 p9.fileProtection(on?) (§ File protection), the pet calls p9.listPets(), p9.loadPet(name), p9.addPets(), p9.importPets(),
@@ -439,7 +441,9 @@ p9://dev/, and the dev session 404 for p9://app/. A failed start, a failed page 
 a crashed editor page is rebuilt on the next open. Its CSP allows only self scripts plus wasm, and connections only to the
 editor host's loopback port. Its preload exposes p9dev.config(), p9dev.save(path, hash,
 content), p9dev.create(path, content), p9dev.hostPath(path, kind), p9dev.openInCode(name, line, reason) and, since v0.1.5,
-p9dev.openFolder() (no arguments); the main process accepts them only
+p9dev.openFolder() (no arguments) and p9dev.files(state) (three whole numbers about the page's own layout, each checked and
+rebuilt before the shell gets them; the shell only sizes the view from them); p9dev.onOnly(callback) receives only false or
+the view's width (in the page's own pixels) as a whole number, never the event object; the main process accepts the calls only
 from that view's main frame on that exact page, and refuses them from the shell.
 
 Open Folder (since v0.1.5, threat model row 41): Dev Focus can open a folder outside your workspace only from the

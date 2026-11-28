@@ -93,5 +93,15 @@ export function devIpc(outer) {
     deliver();
     return { ok: true };
   });
+  // O294: what the editor page shows: tabs (open editor tabs), list (the side bar's width, 0 when hidden) and rest (the width
+  // of what stays beside it: the icon strip, the secondary bar). Three bounded whole numbers, rebuilt here, go on to the shell,
+  // which sizes the view from them. The answer says whether the shell now shows the view files-only: the view's width then, or false.
+  ipcMain.handle('p9dev:files', (event, ...args) => {
+    const s = args[0], whole = n => Number.isSafeInteger(n) && n >= 0 && n <= 100000;
+    if (!outer.fromDev(event) || args.length !== 1 || !s || typeof s !== 'object' || !whole(s.tabs) || !whole(s.list) || !whole(s.rest)) throw new Error('ipc-sender-refused');
+    outer.devFiles = { tabs: s.tabs, list: s.list, rest: s.rest };
+    outer.window.webContents.send('p9:dev-files', outer.devFiles);
+    return { ok: true, only: outer.devOnly };
+  });
   return { request };
 }

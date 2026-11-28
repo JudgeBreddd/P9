@@ -7,9 +7,11 @@ import { dragBar } from './helpers.mjs';
 // A slot that lists focuses shows only in them: leaving one hides it without onClose, coming back shows it again.
 // when(), if given, hides it the same way while it returns false; side.refresh() reads it again (the artifact's chat, O28).
 // mode: 'panel' | 'pinned' | 'full'. In a window under 720 px panel and pinned behave as full.
-export const SIDE_MIN = 280, SIDE_KEEP = 480;
+export const SIDE_MIN = 280, SIDE_KEEP = 480, SIDE_GAP = 8; // SIDE_GAP: what the editor view keeps clear of the panel (placeDev)
 const store = { get: k => { try { return localStorage.getItem(k); } catch { return null; } }, set: (k, v) => { try { localStorage.setItem(k, v); } catch {} } };
-export function createSide({ el, stage, focus, signal, narrow = '(max-width: 719px)' }) {
+// beside(), if given: null, or { width, min, max, set(px) }: the pane beside the panel is to be that wide and the panel takes
+// the rest; the drag bar then sizes that pane and nothing is saved here (O294: Dev Focus's file list with no editor area).
+export function createSide({ el, stage, focus, signal, narrow = '(max-width: 719px)', beside = () => null }) {
   const bar = el.querySelector('.handle-v'), head = el.querySelector('.shead'), title = el.querySelector('.stitle'), body = el.querySelector('.sbody');
   const listeners = new Set(), last = {}, mq = matchMedia(narrow);
   let cur = null; // { slot, opts, mode, prev }
@@ -22,7 +24,8 @@ export function createSide({ el, stage, focus, signal, narrow = '(max-width: 719
   const clamp = px => Math.round(Math.max(SIDE_MIN, Math.min(max(), px)));
   const stored = () => { const v = store.get(key()); return v === null ? NaN : Number(v); };
   let live = null; // the width while dragging or after a key step, before the next focus change
-  const width = () => clamp(live ?? (Number.isFinite(stored()) ? stored() : cur?.opts.defaultWidth?.(space()) ?? 420));
+  const rest = px => Math.max(0, space() - SIDE_GAP - px); // the panel's width for a pane that wide, and the reverse
+  const width = () => { const b = beside(); return b ? rest(b.width) : clamp(live ?? (Number.isFinite(stored()) ? stored() : cur?.opts.defaultWidth?.(space()) ?? 420)); };
   let was = false;
   const apply = () => {
     const on = was = shown();
@@ -34,8 +37,9 @@ export function createSide({ el, stage, focus, signal, narrow = '(max-width: 719
     const w = on && mode() !== 'full' ? width() : 0;
     listeners.forEach(fn => fn(w));
   };
-  dragBar(bar, { axis: 'x', dir: () => edge() === 'right' ? -1 : 1, get: width, set: px => { live = clamp(px); apply(); },
-    min: SIDE_MIN, max, done: px => { store.set(key(), String(clamp(px))); }, signal });
+  dragBar(bar, { axis: 'x', dir: () => edge() === 'right' ? -1 : 1, get: width, set: px => { const b = beside(); if (b) b.set(rest(px)); else live = clamp(px); apply(); },
+    min: () => { const b = beside(); return b ? rest(b.max) : SIDE_MIN; }, max: () => { const b = beside(); return b ? rest(b.min) : max(); },
+    done: px => { if (!beside()) store.set(key(), String(clamp(px))); }, signal });
   const full = () => !!cur && mode() === 'full';
   const api = {
     open(slot, opts) {
@@ -55,6 +59,7 @@ export function createSide({ el, stage, focus, signal, narrow = '(max-width: 719
     onResize(fn) { listeners.add(fn); signal?.addEventListener('abort', () => listeners.delete(fn)); },
     // Dev Focus: the focus changed; width and edge are per focus.
     focus() { live = null; apply(); },
+    apply, // what beside() returns changed
     refresh() { if (shown() !== was) apply(); }, // called on every chat render: the layout is touched only when it shows or hides
     mode(next) { if (!cur) return; cur.prev = cur.mode; cur.mode = next; apply(); },
     back() { if (!cur) return; if (cur.mode === 'full' && cur.prev && cur.prev !== 'full') api.mode(cur.prev); else api.close(cur.slot); },

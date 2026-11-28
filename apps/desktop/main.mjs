@@ -112,7 +112,7 @@ const isDevPage = url => url.split(/[?#]/)[0] === DEV_URL;
 
 export async function createDesktop({ state, open } = {}) {
   // outer: createDesktop's names that the modules split out of it (F9) read and set; getters and setters keep them live.
-  const outer = { get APP_URL() { return APP_URL; }, get cardsHide() { return cardsHide; }, set cardsHide(v) { cardsHide = v; },
+  const outer = { devFiles: null, devOnly: false, get APP_URL() { return APP_URL; }, get cardsHide() { return cardsHide; }, set cardsHide(v) { cardsHide = v; },
     get cardsItems() { return cardsItems; }, set cardsItems(v) { cardsItems = v; },
     get cardsView() { return cardsView; }, set cardsView(v) { cardsView = v; }, get devFolder() { return devFolder; },
     get devReady() { return devReady; }, set devReady(v) { devReady = v; }, get devServing() { return devServing; },
@@ -1212,6 +1212,8 @@ export async function createDesktop({ state, open } = {}) {
     if (serverHost !== host) throw moved();
     return { port, token: body.token, commit: body.commit, data: body.data, server: host };
   };
+  // O294: a replaced or lost editor page takes what it said with it; the shell goes back to the whole view until the new page speaks.
+  const devFilesGone = () => { outer.devFiles = null; outer.devOnly = false; if (!window.isDestroyed()) window.webContents.send('p9:dev-files', null); };
   const openDev = () => dev ??= trackOpen((async () => {
     // FIX2: a newer open (reopenDev) owns the page from here; an older one still running when it ends writes nothing.
     const mine = ++devGen, next = {};
@@ -1220,7 +1222,7 @@ export async function createDesktop({ state, open } = {}) {
     // An extension page's files are asked for at https://*.vscode-cdn.net and answered by VS Code's service worker from the
     // editor host; a request that gets past it never leaves the machine.
     devSession.webRequest.onBeforeRequest({ urls: ['*://*.vscode-cdn.net/*'] }, (_details, callback) => callback({ cancel: true }));
-    devReady = false; devToken = null;
+    devReady = false; devToken = null; devFilesGone();
     if (devView) { window.contentView.removeChildView(devView); devView.webContents.close(); }
     devSession.setPermissionRequestHandler((_contents, permission, callback) => callback(permission === 'clipboard-sanitized-write'));
     devSession.setPermissionCheckHandler((_contents, permission) => permission === 'clipboard-sanitized-write');
@@ -1233,7 +1235,9 @@ export async function createDesktop({ state, open } = {}) {
     // Subframes (the workbench's webviews) stay on p9://dev/ and p9://webview/; the CSP's frame-src says the same.
     devView.webContents.on('will-frame-navigate', event => { if (!event.isMainFrame && !event.url.startsWith(DEV_URL) && !event.url.startsWith(WEBVIEW_URL) && !/^about:(blank|srcdoc)$/.test(event.url)) event.preventDefault(); });
     devView.webContents.on('will-attach-webview', event => event.preventDefault());
-    devView.webContents.on('render-process-gone', () => { dev = null; devReady = false; });
+    // Only the view in use: a replaced view's end says nothing about the one that took its place (#581 r1).
+    const view = devView;
+    devView.webContents.on('render-process-gone', () => { if (view !== devView) return; dev = null; devReady = false; devFilesGone(); });
     // Ctrl/Alt+1/2/3 switch focus from inside the editor too: hand the key to the shell.
     devView.webContents.on('before-input-event', (event, input) => {
       if (input.type === 'keyDown' && (input.control || input.alt) && !input.shift && ['1', '2', '3'].includes(input.key)) {
@@ -1368,7 +1372,8 @@ export async function createDesktop({ state, open } = {}) {
   ipcMain.handle('p9:dev-view', async (event, ...args) => {
     const [b] = args, whole = value => Number.isSafeInteger(value) && value >= 0 && value <= 100000;
     if (event.sender !== window.webContents || event.senderFrame !== window.webContents.mainFrame || event.senderFrame.url !== APP_URL
-        || args.length !== 1 || !b || typeof b.visible !== 'boolean' || (b.visible && !['x', 'y', 'width', 'height'].every(key => whole(b[key])))) throw new Error('ipc-sender-refused');
+        || args.length !== 1 || !b || typeof b.visible !== 'boolean' || (b.visible && !['x', 'y', 'width', 'height'].every(key => whole(b[key])))
+        || (b.only !== undefined && typeof b.only !== 'boolean')) throw new Error('ipc-sender-refused');
     if (!b.visible) { devView?.setVisible(false); return { ok: true }; }
     const shown = devView?.getVisible();
     // D11 (the editor side flashed white while sliding, only when not connected): a failed start
@@ -1379,10 +1384,16 @@ export async function createDesktop({ state, open } = {}) {
     if (!shown) devAgain();
     // The shell measures in its own (zoomed) CSS pixels; the view is placed in window pixels.
     const z = window.webContents.getZoomFactor(), px = value => Math.round(value * z);
+    // O294: only = the shell shows the view files-only (no editor tab open, a panel beside it). The editor page is told the
+    // width the view gets then (false when not), before the view is sized: it gives its file list the editor area's width
+    // only while its own width is that one, so a resize and this message may arrive in either order (#581 r1). The width is
+    // in the editor page's own CSS pixels (the window's pixels over the page's zoom), which is what the page measures (#581 r2).
+    const only = b.only ? Math.round(px(b.width) / devView.webContents.getZoomFactor()) : false;
+    if (only !== outer.devOnly) { outer.devOnly = only; devView.webContents.send('p9dev:only', only); }
     devView.setBounds({ x: px(b.x), y: px(b.y), width: px(b.width), height: px(b.height) });
     devView.setVisible(true);
     if (!shown) devView.webContents.focus();
-    return { ok: true };
+    return { ok: true, files: outer.devFiles }; // files: what the editor page last said, for a shell that loaded after it
   });
   // The view draws above the page, so a top-bar menu opened over it
   // would be under it. The shell asks for a still of the editor, shows it in the view's place, then hides the view while the menu

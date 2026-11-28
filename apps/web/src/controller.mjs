@@ -13,7 +13,7 @@ import { checklistHtml, checklistAction, checklistAnswer } from './checklist.mjs
 import { onboardCard, templateWords, previewCard, freeName } from './onboarding.mjs';
 import { createSky } from './landing-sky.mjs';
 import { pinned, applyCard } from './pinned.mjs';
-import { createSide } from './side.mjs';
+import { createSide, SIDE_GAP, SIDE_MIN } from './side.mjs';
 import { PARTS, partOrder, WIDGETS } from '../../../packages/protocol/index.mjs';
 import { artifactView, artifactsIn, chipArtifact, mountCard, KIND_NAMES } from './artifact.mjs';
 import { installMission } from './mission-view.mjs';
@@ -274,7 +274,23 @@ const names = { claude: 'Claude', codex: 'Codex' };
 const lastAgent = () => { const a = localStorage.getItem('p9-agent-last'); return names[a] ? a : Object.keys(names)[0]; };
 const usedAgent = a => { try { localStorage.setItem('p9-agent-last', a); } catch {} };
 // The side panel (side.mjs). Dev Focus: the chat beside the editor (item 18), on by default, on the right until its tab is dragged across.
-const side = createSide({ el: $('#side'), stage: $('.stage'), focus: () => S.focus, signal: lifetime.signal });
+// O294: Dev Focus with no editor tab open and a panel beside it shows the editor view files-only: the icon strip and the file
+// list, and the panel (the chat) takes the rest. The editor page says what it shows (devFiles: { tabs, list, rest }, null until
+// it has); the view's width (devWide) starts as what it shows and is this page's from then on: the divider drags it, hiding the
+// file list leaves the icon strip, showing it again brings the width back. With the chat off, no tab open is the editor's own
+// empty page, as before.
+const LIST_MIN = 170, LIST_START = 300; // the editor's narrowest file list, and its first width
+let devFiles = null, devWide = null, devKept = null;
+// Not with both the icon strip and the file list hidden: there would be nothing to show, so the editor's empty page stays.
+const devOnly = () => S.focus === 'dev' && devFiles?.tabs === 0 && devFiles.rest + devFiles.list > 0 && !!side.current() && side.current().mode !== 'full';
+const devBeside = () => {
+  if (!devOnly()) return null;
+  const least = devFiles.rest + (devFiles.list ? LIST_MIN : 0), most = devFiles.list ? Math.max(least, $('.stage').clientWidth - SIDE_GAP - SIDE_MIN) : least;
+  const fit = px => Math.round(Math.max(least, Math.min(most, px)));
+  devWide ??= devFiles.rest + devFiles.list;
+  return { width: fit(devWide), min: least, max: most, set: px => { devWide = fit(px); } };
+};
+const side = createSide({ el: $('#side'), stage: $('.stage'), focus: () => S.focus, signal: lifetime.signal, beside: devBeside });
 const chatOn = () => localStorage.getItem('eh-dan-chat:dev') === 'on'; // off until turned on (the owner, attempt 2 item 4)
 const sideSession = () => S.sessions.find(s => s.id === S.sideId && !s.hidden) ?? S.sessions.find(s => s.id === S.open[0]) ?? S.sessions.find(s => !s.hidden);
 function renderSideChat(only) {
@@ -292,6 +308,18 @@ function setSideChat(on) { localStorage.setItem('eh-dan-chat:dev', on ? 'on' : '
 side.onResize(() => { const on = side.current()?.slot === 'dan-chat'; $('#sideToggle').setAttribute('aria-pressed', String(on)); placeDev(); });
 $('#sideToggle').onclick = () => setSideChat(side.current()?.slot !== 'dan-chat');
 side.tab($('#devTab .stab'), 'main');
+function devFilesSaid(state) {
+  const had = devFiles;
+  devFiles = state;
+  if (devWide !== null && had && state) { // files-only already: only hiding and showing the file list move the view
+    if (had.list && !state.list) { devKept = devWide; devWide = state.rest; }
+    else if (!had.list && state.list) devWide = devKept ?? state.rest + Math.max(state.list, LIST_START);
+  }
+  // Its listeners place the view; with no panel nothing changes. Not for a page that is gone (null): placing the view opens
+  // the editor again, and a page that crashed is rebuilt on the next open, not at once (#581 r1).
+  if (state && side.current()) side.apply();
+}
+window.p9?.onDevFiles?.(devFilesSaid);
 if (sampleView) window.__side = side; // ponytail: the UI test's door to the panel (sample data is handed in only by tests, never in a packaged build)
 // Item 19 (threat model row 65): an artifact (artifact.mjs) in the side panel's 'artifact' slot, in the mode the agent
 // picked; its chip in the chat reopens it. Answer 2 in specs/side-panel.md: in Dev Focus with the chat beside the
@@ -771,7 +799,13 @@ function placeDev() {
     [x, y, right, bottom] = [[t.right + 8, y, right, bottom], [x, y, t.left - 8, bottom], [x, t.bottom + 8, right, bottom], [x, y, right, t.top - 8]].reduce((m, o) => room(o) > room(m) ? o : m);
   }
   if (visible) devRect = { x: Math.round(x), y: Math.round(y), width: Math.round(Math.max(0, right - x)), height: Math.round(Math.max(0, bottom - y)) };
-  return window.p9.devView(visible ? { visible, ...devRect } : { visible });
+  // O294: only tells the editor page it is shown files-only; the answer carries what that page last said, for a shell loaded after it.
+  if (!devOnly()) devWide = null; // the next files-only starts from what the editor shows then
+  $('#devTab .stab').textContent = devOnly() ? 'Files' : 'Editor';
+  return Promise.resolve(window.p9.devView(visible ? { visible, ...devRect, only: devOnly() } : { visible })).then(answer => {
+    if (answer && 'files' in answer && JSON.stringify(answer.files) !== JSON.stringify(devFiles)) devFilesSaid(answer.files);
+    return answer;
+  });
 }
 // The editor sits on top of everything, so a top-bar menu (machines, theme, history) opened over the view
 // would be under it. While one is open over it, a still of the editor (p9:dev-still) takes its place and the view steps aside;

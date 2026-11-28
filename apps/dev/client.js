@@ -1,7 +1,7 @@
 // Dev Focus: Monaco + VS Code services (the phase-2 editor, docs/spike-decision.md) against the desktop's loopback editor host.
 // Every write P9's editor makes inside the workspace goes through window.p9dev.save, which the desktop sends to the daemon's
 // guarded save (packages/files). Writes extensions, terminals or language servers make on the host are "runs as you, not guarded".
-import { initialize, getService, IFileService, IThemeService, IExtensionService, ITextFileService, IFileDialogService, IStorageService } from '@codingame/monaco-vscode-api';
+import { initialize, getService, IFileService, IThemeService, IExtensionService, ITextFileService, IFileDialogService, IStorageService, IWorkbenchLayoutService } from '@codingame/monaco-vscode-api';
 import getWorkbench from '@codingame/monaco-vscode-workbench-service-override';
 import { folderError } from '../desktop/dev-folder.mjs';
 import getModel from '@codingame/monaco-vscode-model-service-override';
@@ -31,6 +31,7 @@ import { registerExtension, ExtensionHostKind } from '@codingame/monaco-vscode-a
 import { URI } from '@codingame/monaco-vscode-api/vscode/vs/base/common/uri';
 import { RemoteFileSystemProviderClient } from '@codingame/monaco-vscode-remote-agent-service-override/vscode/vs/workbench/services/remote/common/remoteFileSystemProviderClient';
 import 'vscode/localExtensionHost';
+import { DEFAULT_EDITOR_MIN_DIMENSIONS } from '@codingame/monaco-vscode-api/vscode/vs/workbench/browser/parts/editor/editor';
 import '@codingame/monaco-vscode-theme-defaults-default-extension';
 import '@codingame/monaco-vscode-typescript-basics-default-extension';
 import '@codingame/monaco-vscode-python-default-extension';
@@ -339,8 +340,52 @@ await followLook(config.look);
 let looking = Promise.resolve();
 window.p9dev.onLook(look => { looking = looking.then(() => followLook(look)).catch(error => console.error('p9: editor look failed:', error.message)); });
 await (await getService(IExtensionService)).whenInstalledExtensionsRegistered();
+// O294: with no editor tab open and a panel (the chat) beside this view, the shell shows the view files-only: the icon strip and
+// the file list, no editor area. Nothing in the workbench moves or hides. The workbench keeps an empty editor area at least
+// 220 px wide; it reads that number each time it lays out, so while files-only it is 0 and the file list is given whatever
+// width the editor area gets (fill). The shell owns the view's width then (its divider is the drag handle; the workbench's own
+// edge has no room to move and rests), and this page says what it shows: { tabs, list, rest } (dev-ipc.mjs).
+// Leaving files-only, the 220 px comes back once the view is wide again (or after 500 ms), so the file list is not squeezed.
+// test/dev.test.mjs 'O294' fails if a workbench update stops reading the number live.
+const layout = await getService(IWorkbenchLayoutService), LIST = 'workbench.parts.sidebar', EDITOR = 'workbench.parts.editor';
+const EDITOR_MIN = DEFAULT_EDITOR_MIN_DIMENSIONS.width;
+let only = false, said = '', settle = 0;
+const tabCount = () => v.window.tabGroups.all.reduce((n, group) => n + group.tabs.length, 0);
+const wide = part => (layout.isVisible(part) ? Math.round(layout.getSize(part).width) : 0);
+const filling = () => only !== false && tabCount() === 0;
+// only: the width the shell gives this view while files-only. The list is filled only at that width: a view already resized
+// for the next state (the chat closed) is left alone, whichever of the resize and the word about it comes first.
+const fill = () => {
+  if (!filling() || Math.abs(innerWidth - only) > 2 || !layout.isVisible(LIST)) return;
+  const list = layout.getSize(LIST), spare = layout.getSize(EDITOR).width;
+  if (spare > 0) layout.setSize(LIST, { width: list.width + spare, height: list.height });
+};
+const unfill = force => {
+  if (filling() || DEFAULT_EDITOR_MIN_DIMENSIONS.width !== 0 || !(force === true || layout.getSize(EDITOR).width >= EDITOR_MIN)) return;
+  DEFAULT_EDITOR_MIN_DIMENSIONS.width = EDITOR_MIN; layout.layout();
+};
+const tell = () => {
+  const state = { tabs: tabCount(), list: wide(LIST), rest: wide('workbench.parts.activitybar') + wide('workbench.parts.auxiliarybar') }, now = JSON.stringify(state);
+  if (now === said) return;
+  said = now;
+  window.p9dev.files(state).then(answer => { if (answer.only !== only) { only = answer.only; filesOnly(); } }).catch(error => console.error('p9: the shell was not told what the editor shows:', error.message));
+};
+function filesOnly() {
+  clearTimeout(settle);
+  document.body.classList.toggle('p9-files', filling());
+  if (!filling()) settle = setTimeout(unfill, 500, true);
+  else { if (DEFAULT_EDITOR_MIN_DIMENSIONS.width !== 0) { DEFAULT_EDITOR_MIN_DIMENSIONS.width = 0; layout.layout(); } fill(); }
+  tell();
+}
+window.p9dev.onOnly(value => { only = value; filesOnly(); });
+v.window.tabGroups.onDidChangeTabs(filesOnly);
+v.window.tabGroups.onDidChangeTabGroups(filesOnly); // a group added, removed or restored whole brings its tabs without a tab event
+layout.onDidChangePartVisibility(tell);
+const sized = new ResizeObserver(() => { fill(); unfill(); tell(); });
+for (const part of document.querySelectorAll('.part.sidebar, .part.editor')) sized.observe(part);
+filesOnly();
 // Hooks for the Electron tests (test/dev.test.mjs); the page's own code already holds this API.
-window.devFocus = { v, root, open: async name => v.window.showTextDocument(await v.workspace.openTextDocument(v.Uri.joinPath(v.Uri.parse(guardRoot.toString()), name)), { preview: false }) };
+window.devFocus = { v, root, layout, open: async name => v.window.showTextDocument(await v.workspace.openTextDocument(v.Uri.joinPath(v.Uri.parse(guardRoot.toString()), name)), { preview: false }) };
 // p9 edit / p9 diff (threat model row 14): main sends only checked workspace-relative names, once this page can open them.
 const fileUri = name => v.Uri.joinPath(v.Uri.parse(guardRoot.toString()), name);
 window.p9dev.onOpen(async request => {
