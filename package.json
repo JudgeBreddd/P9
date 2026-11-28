@@ -19,7 +19,7 @@
     "gate:3": "node scripts/with-tmp.mjs node scripts/gate.mjs",
     "gate:all": "node scripts/with-tmp.mjs node scripts/gate.mjs --all",
     "scan": "node scripts/scan.mjs",
-    "quick": "astro check --root apps/web && node scripts/licenses.mjs && node scripts/scan.mjs",
+    "quick": "pnpm -s check && node scripts/licenses.mjs && node scripts/scan.mjs",
     "start": "node apps/server/main.mjs",
     "teh": "node scripts/teh.mjs",
     "build": "astro build --root apps/web && node scripts/frame-runtimes.mjs && vite build --config apps/dev/vite.config.mjs",

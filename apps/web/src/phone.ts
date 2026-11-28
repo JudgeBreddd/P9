@@ -2848,12 +2848,14 @@ async function openFile(path: string, root?: string) {
   if (!root && FILE_IMAGE.test(path)) return openImage(path);
   showImage(false);
   try {
-    const file = await request(root ? '/mission/notes/file?' + new URLSearchParams({ root, path }) : '/files?' + at(path)); state.file = { path, hash: file.hash, content: file.content, root, ...(!root && place && { place }), ...(file.readOnly && { readOnly: true }) };
+    const file = await request(root ? '/mission/notes/file?' + new URLSearchParams({ root, path }) : '/files?' + at(path)); const opened = state.file = { path, hash: file.hash, content: file.content, root, ...(!root && place && { place }), ...(file.readOnly && { readOnly: true }) };
     await putText(file.content);
+    // #578 r1: the file was closed or replaced while the editor loaded; no "Loaded" for a file that is not the open one.
+    if (state.file !== opened) throw new Error('file-changed');
     one('#openPath').textContent = path.split('/').pop()!; one<HTMLElement>('#openPath').title = path; one<HTMLElement>('#browser').hidden = true; one<HTMLElement>('#fileView').hidden = false;
     preview(!!root || /\.md$/i.test(path)); // O67: a Markdown file opens to read; Edit is in the bar's menu
     // review 3 L2: a _private note with File protection on reads, but its save would be refused
-    one('#fileState').textContent = state.file?.readOnly ? 'Read-only: File protection is on' : 'Loaded'; one<HTMLElement>('#conflict').hidden = true;
+    one('#fileState').textContent = opened.readOnly ? 'Read-only: File protection is on' : 'Loaded'; one<HTMLElement>('#conflict').hidden = true;
     online(); syncSave();
     return true;
   } catch (error) {
