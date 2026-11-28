@@ -963,6 +963,9 @@ test('O294: Dev Focus closes the editor area to the file list and the chat; stil
   // The user's own layout (the Explorer in the secondary side bar, showing): closing and the reopen button leave it as it was.
   await one.dev.evaluate(async () => { const { views, v } = window.devFocus; views.moveViewContainerToLocation(views.getViewContainerById('workbench.view.explorer'), 2); await v.commands.executeCommand('workbench.view.explorer'); });
   await one.shell.waitForFunction(() => !document.querySelector('#devClose').hidden, null, { timeout: 15000 });
+  await sleep(1000);
+  const before = await read(one);
+  console.log('NOTE the user layout: ' + JSON.stringify(before));
   await toggle(one, true);
   let got = await read(one);
   console.log('NOTE closed over the user layout: ' + JSON.stringify(got));
@@ -970,7 +973,9 @@ test('O294: Dev Focus closes the editor area to the file list and the chat; stil
   await toggle(one, false);
   got = await read(one);
   console.log('NOTE reopened by the button: ' + JSON.stringify(got));
-  assert.ok(openNow(got) && got.files === 'auxiliarybar' && got.auxiliarybar > 0 && got.sidebar === 0, 'the user layout is back: ' + JSON.stringify(got));
+  const parts = ({ files, sidebar, editor, auxiliarybar }) => ({ files, sidebar: sidebar > 0, editor: editor > 0, auxiliarybar: auxiliarybar > 0 });
+  assert.deepEqual(parts(got), parts(before), 'the user layout is back as it was: ' + JSON.stringify({ before, got }));
+  assert.ok(openNow(got));
   assert.equal(await one.shell.locator('#devClose').textContent(), '×');
   // The default layout from here on: the Explorer in the sidebar, the secondary bar closed.
   await one.dev.evaluate(async () => { const { views, v } = window.devFocus; views.moveViewContainerToLocation(views.getViewContainerById('workbench.view.explorer'), 0); for (const c of ['workbench.action.closeAuxiliaryBar', 'workbench.view.explorer']) await v.commands.executeCommand(c); });
