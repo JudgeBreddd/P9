@@ -130,6 +130,7 @@ select option::checkmark{color:var(--primary)}
 /* Dev Focus mock: Explorer | editor; editor tabs live in the top bar like chat tabs */
 #fDev{grid-template-columns:240px 1fr;grid-template-rows:auto minmax(0,1fr)}
 #fDev>.explorer,#fDev>.editor{grid-row:2}
+#fDev[data-real]>.explorer,#fDev[data-real]>.editor{visibility:hidden}
 .explorer{display:grid;grid-template-rows:auto 1fr;min-height:0;border-right:1px solid var(--border);background:color-mix(in oklch,var(--card) 40%,transparent)}
 .explorer .hd{padding:10px 12px 6px;font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted-foreground);display:flex;gap:8px}
 .explorer .hd .muted{text-transform:none;letter-spacing:0}

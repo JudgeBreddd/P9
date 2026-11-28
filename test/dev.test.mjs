@@ -950,7 +950,7 @@ test('O294: no editor tab and the chat beside: the file list and the chat, no ed
       return { page: innerWidth, strip: w('.part.activitybar'), list: w('.part.sidebar'), editor: w('.part.editor'), tabs: window.devFocus.v.window.tabGroups.all.reduce((n, g) => n + g.tabs.length, 0) };
     }),
     view: await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].contentView.children.find(c => c.webContents?.getURL().startsWith('p9://dev/'))?.getBounds()),
-    ...await shell.evaluate(() => { const side = document.querySelector('#side'), s = side.getBoundingClientRect(); return { chat: side.hidden ? 0 : Math.round(s.width), chatLeft: Math.round(s.left), stage: document.querySelector('.stage').clientWidth, tab: document.querySelector('#devTab .stab').textContent }; }),
+    ...await shell.evaluate(() => { const side = document.querySelector('#side'), s = side.getBoundingClientRect(); return { chat: side.hidden ? 0 : Math.round(s.width), chatLeft: Math.round(s.left), stage: document.querySelector('.stage').clientWidth, tab: document.querySelector('#devTab .stab').textContent, under: ['#devMain', '#fDev>.explorer'].map(q => getComputedStyle(document.querySelector(q)).visibility).join() }; }),
   });
   const until = async (what, ok) => { let got; for (let i = 0; i < 60; i++) { got = await read(); if (ok(got)) { await sleep(600); got = await read(); if (ok(got)) { console.log('NOTE ' + what + ': ' + JSON.stringify(got)); return got; } } await sleep(250); } assert.fail(what + ': ' + JSON.stringify(got)); };
   // What the owner sees: the editor view drawn into the shell's picture where main places it.
@@ -962,7 +962,7 @@ test('O294: no editor tab and the chat beside: the file list and the chat, no ed
     await shell.evaluate(() => document.querySelector('#o294paste').remove());
   };
   const closeAll = () => dev.evaluate(() => window.devFocus.v.commands.executeCommand('workbench.action.closeAllEditors'));
-  const filesOnly = got => got.tabs === 0 && got.editor === 0 && got.list > 0 && got.tab === 'Files' && got.page === got.strip + got.list && got.view.width === got.page;
+  const filesOnly = got => got.tabs === 0 && got.editor === 0 && got.list > 0 && got.tab === 'Files' && got.page === got.strip + got.list && got.view.width === got.page && got.under === 'hidden,hidden'; // under: the sample pane beneath the view is not drawn (its text showed in the 8 px gap)
   const whole = got => got.editor >= 220 && got.tab === 'Editor';
   // 1. Nothing open, the chat off: the editor's own empty page, as before.
   let got = await until('nothing open', g => g.tabs === 0 && g.chat === 0 && whole(g) && g.list > 0);
