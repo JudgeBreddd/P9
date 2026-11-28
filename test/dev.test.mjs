@@ -397,6 +397,7 @@ test('Phase 8: Dev Focus edits real files through the guarded save', { skip, tim
     await editor.edit(edit => edit.replace(new v.Range(0, 0, document.lineCount, 0), 'editor draft 4\n'));
     return { shown, saved: await document.save().catch(error => 'threw: ' + error.message), dirty: document.isDirty };
   });
+  assert.equal(stale4.shown, 'disk version 1\n', 'the editor reloaded the buffer before the edit: the test, not the guard (#584 r1)');
   assert.equal(await readFile(stale, 'utf8'), 'other writer!!\n');
   assert.deepEqual(stale4, { shown: 'disk version 1\n', saved: false, dirty: true });
 
