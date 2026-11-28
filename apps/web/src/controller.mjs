@@ -274,7 +274,7 @@ const names = { claude: 'Claude', codex: 'Codex' };
 const lastAgent = () => { const a = localStorage.getItem('p9-agent-last'); return names[a] ? a : Object.keys(names)[0]; };
 const usedAgent = a => { try { localStorage.setItem('p9-agent-last', a); } catch {} };
 // The side panel (side.mjs). Dev Focus: the chat beside the editor (item 18), on by default, on the right until its tab is dragged across.
-const side = createSide({ el: $('#side'), stage: $('.stage'), focus: () => S.focus, signal: lifetime.signal });
+const side = createSide({ el: $('#side'), stage: $('.stage'), focus: () => S.focus, signal: lifetime.signal, fixed: () => S.focus === 'dev' && !!$('.stage').dataset.devClosed });
 const chatOn = () => localStorage.getItem('eh-dan-chat:dev') === 'on'; // off until turned on (the owner, attempt 2 item 4)
 const sideSession = () => S.sessions.find(s => s.id === S.sideId && !s.hidden) ?? S.sessions.find(s => s.id === S.open[0]) ?? S.sessions.find(s => !s.hidden);
 function renderSideChat(only) {
@@ -298,14 +298,13 @@ side.tab($('#devTab .stab'), 'main');
 const devClose = $('#devClose'), stage = $('.stage');
 let devHeard = false;
 const devEditorState = closed => {
-  devHeard = true;
+  devHeard = closed !== null;
   if (closed) stage.dataset.devClosed = '1'; else delete stage.dataset.devClosed;
   $('#devTab .stab').textContent = closed ? 'Files' : 'Editor';
   devClose.textContent = closed ? '⤢' : '×'; devClose.title = closed ? 'Open the editor area' : 'Close the editor area'; devClose.ariaLabel = devClose.title;
-  devClose.hidden = false;
-  $('#side .handle-v').inert = closed; // the width is fixed while closed: no drag, no arrow keys
-  // Under 720 px the chat would take the whole stage and hide the file list with this button, so it is not opened there.
-  if (closed && !side.current() && !matchMedia('(max-width: 719px)').matches) setSideChat(true);
+  devClose.hidden = closed === null; // null: the editor page was replaced or lost and has not said its state yet
+  side.apply(); // closed: the side panel keeps its place at any width and its divider rests (createSide's fixed)
+  if (closed && !side.current()) setSideChat(true);
   placeDev();
 };
 devClose.onclick = () => window.p9.devEditor(!stage.dataset.devClosed);

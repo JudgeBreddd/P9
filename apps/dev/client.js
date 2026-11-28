@@ -342,37 +342,50 @@ await (await getService(IExtensionService)).whenInstalledExtensionsRegistered();
 // O294: the editor area can be closed, leaving the file list and the chat. The workbench's own hide-editor switch always opens
 // the panel in its place, so the Explorer goes into the secondary side bar and that bar is maximized: the file list alone.
 // Opening a file un-maximizes it (the workbench does that itself), which opens the editor area again. Closing records what it
-// takes over (whether it moved the Explorer, whether the secondary bar was showing) and opening undoes only that; the record is
-// saved here and applied at the next start, before p9 edit requests are let in. Nothing saved = the layout is not touched.
+// takes over (where the Explorer was if it moved it, whether the secondary bar was showing) and opening undoes only that; a close
+// that fails part way puts back what it had moved. The record is saved here and applied at the next start, before p9 edit
+// requests are let in (at most 5 s: a stuck command never holds them). Nothing saved = the layout is not touched. Opening the
+// editor area always un-maximizes the secondary bar: a maximized bar is what hides the editor area.
 // One change at a time, in order, saved and told to the shell only once the layout matches (p9dev.editorClosed).
 const views = await getService(IViewDescriptorService), layout = await getService(IWorkbenchLayoutService);
-const SIDEBAR = 0, AUX = 2, AUX_PART = 'workbench.parts.auxiliarybar', EDITOR_KEY = 'p9-editor-closed'; // ViewContainerLocation, Parts
+const AUX = 2, AUX_PART = 'workbench.parts.auxiliarybar', EDITOR_KEY = 'p9-editor-closed'; // ViewContainerLocation, Parts
 let taken = (() => { try { return JSON.parse(localStorage.getItem(EDITOR_KEY)); } catch { return null; } })(); // null while open
 const applyEditor = async closed => {
   const explorer = views.getViewContainerById('workbench.view.explorer'), where = () => explorer && views.getViewContainerLocation(explorer);
-  if (closed) {
-    const was = taken ?? { moved: where() !== AUX, auxShown: layout.isVisible(AUX_PART) };
-    if (explorer && where() !== AUX) views.moveViewContainerToLocation(explorer, AUX);
-    await v.commands.executeCommand('workbench.view.explorer');
-    layout.setAuxiliaryBarMaximized(true);
-    taken = was;
-  } else if (taken) {
-    const was = taken;
-    taken = null;
-    layout.setAuxiliaryBarMaximized(false);
-    if (was.moved && where() !== SIDEBAR) views.moveViewContainerToLocation(explorer, SIDEBAR);
-    if (!was.auxShown) await v.commands.executeCommand('workbench.action.closeAuxiliaryBar');
-    if (was.moved) await v.commands.executeCommand('workbench.view.explorer');
-    await v.commands.executeCommand('workbench.action.focusActiveEditorGroup'); // the opened file keeps the keyboard
+  // from: the Explorer's location before closing moved it (null: it was already in the secondary bar).
+  const back = was => { if (explorer && was.from !== null && was.from !== undefined && where() !== was.from) views.moveViewContainerToLocation(explorer, was.from); };
+  try {
+    if (closed && !taken) {
+      const was = { from: where() === AUX ? null : where() ?? null, auxShown: layout.isVisible(AUX_PART) };
+      try {
+        if (explorer && where() !== AUX) views.moveViewContainerToLocation(explorer, AUX);
+        await v.commands.executeCommand('workbench.view.explorer');
+        layout.setAuxiliaryBarMaximized(true);
+      } catch (error) { back(was); if (!was.auxShown) layout.setPartHidden(true, AUX_PART); throw error; }
+      taken = was;
+    } else if (closed) {
+      if (explorer && where() !== AUX) views.moveViewContainerToLocation(explorer, AUX); // a saved close at start
+      await v.commands.executeCommand('workbench.view.explorer');
+      layout.setAuxiliaryBarMaximized(true);
+    } else if (taken) {
+      const was = taken;
+      taken = null;
+      layout.setAuxiliaryBarMaximized(false);
+      back(was);
+      if (!was.auxShown) await v.commands.executeCommand('workbench.action.closeAuxiliaryBar');
+      if (was.from !== null) await v.commands.executeCommand('workbench.view.explorer');
+      await v.commands.executeCommand('workbench.action.focusActiveEditorGroup'); // the opened file keeps the keyboard
+    }
+  } finally {
+    try { if (taken) localStorage.setItem(EDITOR_KEY, JSON.stringify(taken)); else localStorage.removeItem(EDITOR_KEY); } catch {}
+    await window.p9dev.editorClosed(!!taken);
   }
-  try { if (taken) localStorage.setItem(EDITOR_KEY, JSON.stringify(taken)); else localStorage.removeItem(EDITOR_KEY); } catch {}
-  await window.p9dev.editorClosed(!!taken);
 };
 let editorChange = Promise.resolve();
 const setEditorClosed = closed => (editorChange = editorChange.then(() => applyEditor(closed)).catch(error => console.error('p9: the editor area did not change:', error.message)));
 layout.onDidChangeAuxiliaryBarMaximized(() => { if (taken && !layout.isAuxiliaryBarMaximized()) setEditorClosed(false); });
 window.p9dev.onEditor(setEditorClosed);
-await setEditorClosed(!!taken);
+await Promise.race([setEditorClosed(!!taken), new Promise(done => setTimeout(done, 5000))]);
 // Hooks for the Electron tests (test/dev.test.mjs); the page's own code already holds this API.
 window.devFocus = { v, root, views, layout, open: async name => v.window.showTextDocument(await v.workspace.openTextDocument(v.Uri.joinPath(v.Uri.parse(guardRoot.toString()), name)), { preview: false }) };
 // p9 edit / p9 diff (threat model row 14): main sends only checked workspace-relative names, once this page can open them.

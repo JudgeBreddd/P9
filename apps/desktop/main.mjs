@@ -1212,6 +1212,8 @@ export async function createDesktop({ state, open } = {}) {
     if (serverHost !== host) throw moved();
     return { port, token: body.token, commit: body.commit, data: body.data, server: host };
   };
+  // O294: a replaced or crashed editor page's closed state is gone with it; the shell hides the button until the new page says its own.
+  const devEditorGone = () => { outer.devEditorClosed = null; if (!window.isDestroyed()) window.webContents.send('p9:dev-editor-state', null); };
   const openDev = () => dev ??= trackOpen((async () => {
     // FIX2: a newer open (reopenDev) owns the page from here; an older one still running when it ends writes nothing.
     const mine = ++devGen, next = {};
@@ -1220,7 +1222,7 @@ export async function createDesktop({ state, open } = {}) {
     // An extension page's files are asked for at https://*.vscode-cdn.net and answered by VS Code's service worker from the
     // editor host; a request that gets past it never leaves the machine.
     devSession.webRequest.onBeforeRequest({ urls: ['*://*.vscode-cdn.net/*'] }, (_details, callback) => callback({ cancel: true }));
-    devReady = false; devToken = null;
+    devReady = false; devToken = null; devEditorGone();
     if (devView) { window.contentView.removeChildView(devView); devView.webContents.close(); }
     devSession.setPermissionRequestHandler((_contents, permission, callback) => callback(permission === 'clipboard-sanitized-write'));
     devSession.setPermissionCheckHandler((_contents, permission) => permission === 'clipboard-sanitized-write');
@@ -1233,7 +1235,7 @@ export async function createDesktop({ state, open } = {}) {
     // Subframes (the workbench's webviews) stay on p9://dev/ and p9://webview/; the CSP's frame-src says the same.
     devView.webContents.on('will-frame-navigate', event => { if (!event.isMainFrame && !event.url.startsWith(DEV_URL) && !event.url.startsWith(WEBVIEW_URL) && !/^about:(blank|srcdoc)$/.test(event.url)) event.preventDefault(); });
     devView.webContents.on('will-attach-webview', event => event.preventDefault());
-    devView.webContents.on('render-process-gone', () => { dev = null; devReady = false; });
+    devView.webContents.on('render-process-gone', () => { dev = null; devReady = false; devEditorGone(); });
     // Ctrl/Alt+1/2/3 switch focus from inside the editor too: hand the key to the shell.
     devView.webContents.on('before-input-event', (event, input) => {
       if (input.type === 'keyDown' && (input.control || input.alt) && !input.shift && ['1', '2', '3'].includes(input.key)) {
@@ -1402,6 +1404,7 @@ export async function createDesktop({ state, open } = {}) {
     if (event.sender !== window.webContents || event.senderFrame !== window.webContents.mainFrame || event.senderFrame.url !== APP_URL
         || args.length > 1 || (args.length === 1 && typeof args[0] !== 'boolean')) throw new Error('ipc-sender-refused');
     if (!args.length) return { closed: outer.devEditorClosed };
+    if (outer.devEditorClosed === null) return { ok: false }; // no editor page has said its state yet: nobody to act on it
     devView?.webContents.send('p9dev:editor', args[0]);
     return { ok: true };
   });

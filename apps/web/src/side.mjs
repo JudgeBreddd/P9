@@ -9,14 +9,16 @@ import { dragBar } from './helpers.mjs';
 // mode: 'panel' | 'pinned' | 'full'. In a window under 720 px panel and pinned behave as full.
 export const SIDE_MIN = 280, SIDE_KEEP = 480;
 const store = { get: k => { try { return localStorage.getItem(k); } catch { return null; } }, set: (k, v) => { try { localStorage.setItem(k, v); } catch {} } };
-export function createSide({ el, stage, focus, signal, narrow = '(max-width: 719px)' }) {
+// fixed(): while true the panel keeps its place beside the stage at any width and its divider rests (O294: Dev Focus with the
+// editor area closed keeps the file list and its reopen button in sight; only Dev Focus's split is fixed, not Chat's or Mission's).
+export function createSide({ el, stage, focus, signal, narrow = '(max-width: 719px)', fixed = () => false }) {
   const bar = el.querySelector('.handle-v'), head = el.querySelector('.shead'), title = el.querySelector('.stitle'), body = el.querySelector('.sbody');
   const listeners = new Set(), last = {}, mq = matchMedia(narrow);
   let cur = null; // { slot, opts, mode, prev }
   const key = () => 'eh-side:' + focus(), edgeKey = () => 'eh-side-edge:' + focus();
   const shown = () => !!cur && (!cur.opts.focuses || cur.opts.focuses.includes(focus())) && (!cur.opts.when || cur.opts.when());
   const edge = () => store.get(edgeKey()) === 'left' ? 'left' : 'right';
-  const mode = () => !cur ? null : mq.matches && cur.mode !== 'full' ? 'full' : cur.mode;
+  const mode = () => !cur ? null : mq.matches && cur.mode !== 'full' && !fixed() ? 'full' : cur.mode;
   const space = () => stage.clientWidth;
   const max = () => Math.max(SIDE_MIN, Math.min(space() * .7, space() - SIDE_KEEP));
   const clamp = px => Math.round(Math.max(SIDE_MIN, Math.min(max(), px)));
@@ -27,6 +29,7 @@ export function createSide({ el, stage, focus, signal, narrow = '(max-width: 719
   const apply = () => {
     const on = was = shown();
     el.hidden = !on;
+    bar.inert = fixed(); // no drag, no arrow keys
     stage.dataset.side = on ? edge() : '';
     stage.dataset.sideMode = on ? mode() : '';
     if (on) stage.style.setProperty('--side-w', width() + 'px'); else stage.style.removeProperty('--side-w');
@@ -55,6 +58,7 @@ export function createSide({ el, stage, focus, signal, narrow = '(max-width: 719
     onResize(fn) { listeners.add(fn); signal?.addEventListener('abort', () => listeners.delete(fn)); },
     // Dev Focus: the focus changed; width and edge are per focus.
     focus() { live = null; apply(); },
+    apply, // fixed() changed
     refresh() { if (shown() !== was) apply(); }, // called on every chat render: the layout is touched only when it shows or hides
     mode(next) { if (!cur) return; cur.prev = cur.mode; cur.mode = next; apply(); },
     back() { if (!cur) return; if (cur.mode === 'full' && cur.prev && cur.prev !== 'full') api.mode(cur.prev); else api.close(cur.slot); },

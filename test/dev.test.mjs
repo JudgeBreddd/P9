@@ -922,7 +922,7 @@ test('O268: the editor terminal uses the page renderer at its font size when Web
 
 // O294: the editor area's close button leaves the file list on the left and the chat in the rest; the choice survives a
 // restart; opening a file brings the editor back (and the Explorer back to the sidebar, the file keeping the keyboard).
-test('O294: Dev Focus closes the editor area to the file list and the chat; still closed after a restart; opening a file brings it back; only what closing changed is undone', { skip: process.platform !== 'linux', timeout: 360000 }, logged(async t => {
+test('O294: Dev Focus closes the editor area to the file list and the chat; still closed after a restart; opening a file brings it back; only what closing changed is undone; narrow windows keep the file list', { skip: process.platform !== 'linux', timeout: 360000 }, logged(async t => {
   const editor = await editorFor();
   if (!editor) return t.skip('needs the editor server (P9_EDITOR_HOST, or the fixtures reh.tar.gz)');
   const instance = await daemon(t), home = await mkdtemp(path.join(os.tmpdir(), 'p9-dev-home-'));
@@ -977,8 +977,30 @@ test('O294: Dev Focus closes the editor area to the file list and the chat; stil
   assert.deepEqual(parts(got), parts(before), 'the user layout is back as it was: ' + JSON.stringify({ before, got }));
   assert.ok(openNow(got));
   assert.equal(await one.shell.locator('#devClose').textContent(), '×');
+  // The Explorer in the bottom panel: closing moves it, the reopen button puts it back there (not in the sidebar).
+  const explorerAt = ({ dev }) => dev.evaluate(() => { const { views } = window.devFocus; return views.getViewContainerLocation(views.getViewContainerById('workbench.view.explorer')); });
+  await one.dev.evaluate(async () => { const { views, v } = window.devFocus; views.moveViewContainerToLocation(views.getViewContainerById('workbench.view.explorer'), 1); await v.commands.executeCommand('workbench.view.explorer'); });
+  await sleep(500);
+  await toggle(one, true);
+  assert.ok(closedNow(await read(one)));
+  await toggle(one, false);
+  assert.equal(await explorerAt(one), 1, 'the Explorer is back in the panel');
   // The default layout from here on: the Explorer in the sidebar, the secondary bar closed.
   await one.dev.evaluate(async () => { const { views, v } = window.devFocus; views.moveViewContainerToLocation(views.getViewContainerById('workbench.view.explorer'), 0); for (const c of ['workbench.action.closeAuxiliaryBar', 'workbench.view.explorer']) await v.commands.executeCommand(c); });
+  // A close that fails part way puts back what it moved: the Explorer stays in the sidebar, nothing saved, still open.
+  const patched = await one.dev.evaluate(() => {
+    const { v } = window.devFocus, run = v.commands.executeCommand;
+    try { v.commands.executeCommand = (id, ...rest) => id === 'workbench.view.explorer' ? Promise.reject(new Error('refused for the test')) : run.call(v.commands, id, ...rest); } catch { return false; }
+    window.__run = run; return v.commands.executeCommand !== run;
+  });
+  if (patched) {
+    await one.shell.click('#devClose');
+    await sleep(2000);
+    got = { ...await read(one), at: await explorerAt(one), saved: await one.dev.evaluate(() => localStorage.getItem('p9-editor-closed')) };
+    console.log('NOTE after a failed close: ' + JSON.stringify(got));
+    assert.ok(openNow(got) && got.at === 0 && got.saved === null && got.auxiliarybar === 0, 'a failed close is put back: ' + JSON.stringify(got));
+    await one.dev.evaluate(() => { window.devFocus.v.commands.executeCommand = window.__run; });
+  } else console.log('NOTE the command could not be refused for the test (the API object is frozen); the failed-close check is skipped');
   await toggle(one, true);
   got = await read(one);
   console.log('NOTE closed: ' + JSON.stringify(got));
@@ -988,6 +1010,30 @@ test('O294: Dev Focus closes the editor area to the file list and the chat; stil
   assert.equal(await one.shell.locator('#devClose').textContent(), '⤢');
   await shot(one.dev, 'o294-closed-dev');
   await shot(one.shell, 'o294-closed-shell');
+  // What the user sees: the editor view drawn into the shell's picture where main places it (the shell's own picture has only
+  // the placeholder under the view).
+  const at = await one.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].contentView.children.find(c => c.webContents?.getURL().startsWith('p9://dev/'))?.getBounds());
+  const devJpeg = (await one.dev.screenshot({ type: 'jpeg', quality: 80 })).toString('base64');
+  await one.shell.evaluate(({ at, src }) => { const img = Object.assign(document.createElement('img'), { id: 'o294paste', src: 'data:image/jpeg;base64,' + src }); Object.assign(img.style, { position: 'fixed', left: at.x + 'px', top: at.y + 'px', width: at.width + 'px', height: at.height + 'px', zIndex: 99999 }); document.body.append(img); return img.decode(); }, { at, src: devJpeg });
+  await shot(one.shell, 'o294-closed-seen');
+  await one.shell.evaluate(() => document.querySelector('#o294paste').remove());
+  // A narrow window (zoomed to under 720 px wide): the chat stays beside the file list, the reopen button in sight.
+  await one.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].webContents.setZoomFactor(2.2));
+  await sleep(1500);
+  const narrow = await one.shell.evaluate(() => { const b = document.querySelector('#devClose').getBoundingClientRect(); return { inner: innerWidth, mode: document.querySelector('.stage').dataset.sideMode, button: document.elementFromPoint(b.x + b.width / 2, b.y + b.height / 2)?.id }; });
+  console.log('NOTE narrow: ' + JSON.stringify(narrow));
+  await one.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].webContents.setZoomFactor(1));
+  await sleep(1000);
+  assert.ok(narrow.inner < 720 && narrow.mode !== 'full' && narrow.button === 'devClose', 'narrow: the chat does not cover the file list or the button: ' + JSON.stringify(narrow));
+  // The divider rests only in Dev Focus: Chat Focus's own split still moves.
+  const dividerInert = () => one.shell.evaluate(() => document.querySelector('#side .handle-v').inert);
+  assert.equal(await dividerInert(), true);
+  await one.shell.keyboard.press('Control+1');
+  await sleep(500);
+  assert.equal(await dividerInert(), false, 'Chat Focus: the divider moves');
+  await one.shell.keyboard.press('Control+2');
+  await sleep(500);
+  assert.equal(await dividerInert(), true);
   assert.deepEqual(online(one.errors), []);
   await one.app.close();
   // Restart: the same profile and workspace; the editor area is still closed.
@@ -1021,5 +1067,8 @@ test('O294: Dev Focus closes the editor area to the file list and the chat; stil
   await shellReady(two.shell);
   await two.shell.waitForFunction(() => !!document.querySelector('.stage').dataset.devClosed && !document.querySelector('#devClose').hidden && document.querySelector('#devClose').textContent === '⤢', null, { timeout: 15000 });
   assert.deepEqual(online(two.errors), []);
-  console.log('PASS O294 close, reopen, restart, open, race, shell reload');
+  // The editor page lost: its state goes with it, the button hides until a new page says its own.
+  await two.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].contentView.children.find(c => c.webContents?.getURL().startsWith('p9://dev/'))?.webContents.forcefullyCrashRenderer());
+  await two.shell.waitForFunction(() => document.querySelector('#devClose').hidden, null, { timeout: 15000 });
+  console.log('PASS O294 close, reopen, restart, open, race, shell reload, origin kept, failed close, narrow, divider scope, lost page');
 }));
