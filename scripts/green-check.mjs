@@ -84,7 +84,8 @@ async function main() {
   if (red.length) refuse(`item ${item}: CI on ${commit.slice(0, 8)} is not green (${red.map((r) => r.name + ' ' + r.conclusion).join(', ')})`);
   const seen = [];
   for (const r of runs) for (const j of page(`repos/${repo}/actions/runs/${r.id}/jobs?per_page=100`, 'jobs')) {
-    if (j.conclusion === 'skipped') continue;
+    // C1 (O286): the quarantine shard is advisory (it never blocks), so its lines are no evidence either way.
+    if (j.conclusion === 'skipped' || / \(quarantine\)$/.test(j.name)) continue;
     const log = gh(`repos/${repo}/actions/jobs/${j.id}/logs`);
     if (!log.trim()) refuse(`item ${item}: the log of CI job "${j.name}" is empty`);
     seen.push(...results(log));

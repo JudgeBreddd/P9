@@ -9,8 +9,22 @@ import path from 'node:path';
 
 const ALONE = new Set(['shell-bundle.test.mjs']);
 const [mode, ...list] = process.argv.slice(2);
+// C1 (O286): test/quarantine.json lists flaky tests taken off the blocking path, { file, name, row, since }. `pattern` prints
+// one regex matching exactly their names (empty when there are none), for the quarantine job's --test-name-pattern;
+// `pattern <files>` only the entries of those files, for --test-skip-pattern on a quarantined file's own call (#573 r1: a
+// title alone would also skip a same-title test in another file). A quarantined file runs alone, one call each, as
+// shell-bundle does, so no other file shares its skip. `quarantine` prints their files. test/quarantine.test.mjs keeps it honest.
+if (mode === 'pattern' || mode === 'quarantine') {
+  const q = JSON.parse(readFileSync(new URL('quarantine.json', import.meta.url), 'utf8'));
+  const esc = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const mine = list.length ? q.filter((t) => list.includes(t.file)) : q;
+  console.log(mode === 'pattern' ? (mine.length ? `^(${mine.map((t) => esc(t.name)).join('|')})$` : '') : [...new Set(q.map((t) => t.file))].join(' '));
+  process.exit(0);
+}
 if (mode === 'together' || mode === 'alone') {
-  console.log(list.filter((file) => ALONE.has(path.basename(file)) === (mode === 'alone')).join(' '));
+  const quarantined = new Set(JSON.parse(readFileSync(new URL('quarantine.json', import.meta.url), 'utf8')).map((t) => path.basename(t.file)));
+  const alone = (file) => ALONE.has(path.basename(file)) || quarantined.has(path.basename(file));
+  console.log(list.filter((file) => alone(file) === (mode === 'alone')).join(' '));
   process.exit(0);
 }
 const [index, count] = process.argv.slice(2).map(Number);

@@ -12,6 +12,10 @@ import { root } from './helpers.mjs';
 const BUNDLE = 'test/shell-bundle.test.mjs';
 
 // The `run: |` block of the Linux job's "Tests" step, unindented.
+const QPAT = execFileSync(process.execPath, ['test/shard.mjs', 'pattern'], { cwd: root, encoding: 'utf8' }).trim();
+// C1 (O286), #573 r1 blockers 2 and 3: the quarantined files run one per call, and only those calls skip, by their own entries.
+const QFILES = execFileSync(process.execPath, ['test/shard.mjs', 'quarantine'], { cwd: root, encoding: 'utf8' }).trim().split(' ').filter(Boolean);
+const skipOf = (a) => /--test-skip-pattern=(\S.*?)(?= test\/| --|$)/.exec(a)?.[1] ?? null;
 const testsStep = async () => {
   const lines = (await readFile(path.join(root, '.github/workflows/test.yaml'), 'utf8')).split('\n');
   const at = lines.findIndex((line) => line.trim() === '- name: Tests');
@@ -27,26 +31,32 @@ test('CI runs shell-bundle alone after its shard, and a failure in either part f
   const dir = await mkdtemp(path.join(os.tmpdir(), 'p9-shard-'));
   t.after(() => rm(dir, { recursive: true, force: true }));
   // Stand-ins: xvfb-run logs the test files of each call (the arguments after the last flag) and fails when FAIL is one of them.
-  await writeFile(path.join(dir, 'xvfb-run'), '#!/bin/bash\nfiles=(); for a in "$@"; do [[ $a == test/*.test.mjs ]] && files+=("$a"); done\necho "${files[*]}" >> "$CALLS"\nfor f in "${files[@]}"; do [ "$f" = "$FAIL" ] && exit 1; done\nexit 0\n');
+  await writeFile(path.join(dir, 'xvfb-run'), '#!/bin/bash\nfiles=(); for a in "$@"; do [[ $a == test/*.test.mjs ]] && files+=("$a"); done\necho "${files[*]}" >> "$CALLS"\necho "$*" >> "$CALLS.args"\nfor f in "${files[@]}"; do [ "$f" = "$FAIL" ] && exit 1; done\nexit 0\n');
   await writeFile(path.join(dir, 'systemctl'), '#!/bin/sh\nexit 0\n');
   await chmod(path.join(dir, 'xvfb-run'), 0o755); await chmod(path.join(dir, 'systemctl'), 0o755);
   let n = 0;
   const step = (env) => {
     const calls = path.join(dir, `calls-${n++}`);
     const r = spawnSync('bash', ['-e', '-c', script], { cwd: root, encoding: 'utf8', env: { ...process.env, PATH: `${dir}:${process.env.PATH}`, RUNNER_TEMP: dir, CALLS: calls, FILES: '', FAIL: '', ...env } });
-    let list = [];
+    let list = [], args = [];
     try { list = execFileSync('cat', [calls], { encoding: 'utf8' }).trim().split('\n'); } catch {}
-    return { code: r.status, calls: list, out: r.stdout + r.stderr };
+    try { args = execFileSync('cat', [calls + '.args'], { encoding: 'utf8' }).trim().split('\n'); } catch {}
+    return { code: r.status, calls: list, args, out: r.stdout + r.stderr };
   };
 
   const all = (await readdir(path.join(root, 'test'))).filter((name) => name.endsWith('.test.mjs')).map((name) => 'test/' + name).sort();
   const ran = [];
   for (let shard = 0; shard < 7; shard++) {
-    const { code, calls, out } = step({ SHARD: String(shard) });
+    const { code, calls, args, out } = step({ SHARD: String(shard) });
     assert.equal(code, 0, `shard ${shard}: ${out}`);
+    calls.forEach((c, i) => {
+      const own = QFILES.includes(c) ? execFileSync(process.execPath, ['test/shard.mjs', 'pattern', c], { cwd: root, encoding: 'utf8' }).trim() : null;
+      assert.equal(skipOf(args[i]), own || null, `shard ${shard}: only a quarantined file's own call skips, by its entries (${c})`);
+    });
     const together = calls[0].split(' ');
     assert.ok(!together.includes(BUNDLE), `shard ${shard} ran shell-bundle beside other files: ${calls[0]}`);
-    if (calls.length > 1) assert.deepEqual(calls.slice(1), [BUNDLE], `shard ${shard}: after its files, only shell-bundle, alone`);
+    for (const q of QFILES) assert.ok(!together.includes(q) || together.length === 1, `shard ${shard} ran quarantined ${q} beside other files`);
+    for (const c of calls.slice(1)) assert.ok(c === BUNDLE || QFILES.includes(c), `shard ${shard}: after its files, only alone files, one each: ${c}`);
     ran.push(...calls.flatMap((c) => c.split(' ')));
   }
   assert.deepEqual(ran.sort(), all, 'every test file runs once across the 7 shards');
@@ -55,9 +65,20 @@ test('CI runs shell-bundle alone after its shard, and a failure in either part f
   const named = { FILES: `test/shard.test.mjs ${BUNDLE} test/file-limit.test.mjs`, SHARD: '0' };
   assert.deepEqual(step(named).calls, ['test/shard.test.mjs test/file-limit.test.mjs', BUNDLE]);
   assert.deepEqual(step({ ...named, FILES: BUNDLE }).calls, [BUNDLE], 'only shell-bundle named: one call, no empty run');
+  // A dispatched quarantined file runs in full: the author asked for it (blocker 2).
+  for (const q of QFILES) for (const a of step({ FILES: `${q} test/shard.test.mjs`, SHARD: '0' }).args) assert.equal(skipOf(a), null, `dispatched ${q}: no skip: ${a.slice(0, 300)}`);
   // A failure in the files run together, or in the alone run, fails the step; the alone run still runs after a failure.
   const early = step({ ...named, FAIL: 'test/shard.test.mjs' });
   assert.notEqual(early.code, 0, 'a failing file run together fails the step');
   assert.equal(early.calls.length, 2, 'shell-bundle still runs after the others failed');
   assert.notEqual(step({ ...named, FAIL: BUNDLE }).code, 0, 'a failing shell-bundle fails the step');
+
+  // C1 (O286): the quarantine shard runs shell-bundle's timing, then only the quarantined tests by name, and never fails.
+  const summary = path.join(dir, 'summary.md');
+  const qfiles = execFileSync(process.execPath, ['test/shard.mjs', 'quarantine'], { cwd: root, encoding: 'utf8' }).trim();
+  const q = step({ SHARD: 'quarantine', FAIL: qfiles.split(' ')[0] || BUNDLE, GITHUB_STEP_SUMMARY: summary });
+  assert.equal(q.code, 0, `the quarantine shard exits 0 when a quarantined test fails: ${q.out}`);
+  assert.deepEqual(q.calls, qfiles ? [BUNDLE, qfiles] : [BUNDLE]);
+  if (qfiles) assert.ok(q.args[1].includes(`--test-name-pattern=${QPAT}`), q.args[1]);
+  assert.match(await readFile(summary, 'utf8'), /Quarantined tests \(not blocking\)/);
 });

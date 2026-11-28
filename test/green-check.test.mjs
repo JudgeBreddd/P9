@@ -138,3 +138,13 @@ test('green check: the plan template written before the Tests clause still reads
   assert.equal(isPlan(before), true);
   assert.equal(isPlan(before.replace('Goal:', 'Goal: ship')), false);
 });
+
+// C1 (O286), #573 round 1 blocker 1: the `linux (quarantine)` job reruns shell-bundle and the quarantined tests and never
+// blocks; its pass or failure is not evidence, so the gate reads it as it reads a skipped job.
+test('green check ignores the advisory quarantine job: its pass is not a second pass, its failure is not a red', () => {
+  const jobs = [{ id: 11, name: 'linux (0)', conclusion: 'success' }, { id: 13, name: 'linux (quarantine)', conclusion: 'success' }];
+  const again = run({ jobs, logs: { 11: LOG, 13: '2026-11-20T10:00:02.0000000Z P9_PASS test/a.test.mjs :: alpha works' } });
+  assert.equal(again.status, 0, again.out);
+  const red = run({ jobs, logs: { 11: LOG, 13: '2026-11-20T10:00:02.0000000Z   ✖ alpha works (3ms)' } });
+  assert.equal(red.status, 0, red.out);
+});
