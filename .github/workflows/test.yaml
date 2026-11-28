@@ -240,7 +240,7 @@ jobs:
   # each, and never blocks. #577 r1 #3 (O293): its own job, not a leg of linux, so `tests` (which needs linux) never waits
   # for it; the linux job's env and steps (YAML anchors), with a one-entry matrix so matrix.shard reads quarantine.
   quarantine:
-    name: linux (quarantine)
+    name: linux (${{ matrix.shard }})
     needs: quick
     if: ${{ !cancelled() && !inputs.bare && !inputs.windows && !inputs.files && needs.quick.result == 'success' && needs.quick.outputs.heavy == 'true' && !github.event.pull_request.draft }}
     strategy:
