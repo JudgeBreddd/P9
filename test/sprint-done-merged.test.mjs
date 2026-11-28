@@ -17,8 +17,9 @@ const call = (instance, route, method = 'GET', body) => http({ socketPath: insta
 const g = (cwd, ...args) => execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@example.com', ...args], { cwd, encoding: 'utf8' }).trim();
 const rows = async (instance) => (await call(instance, '/chat')).body.conversations;
 async function attach(t, instance, conversation) {
-  const events = (await call(instance, `/chat/events?after=0&only=${conversation}`)).body.events;
-  const hit = events.find((e) => e.data?.content?.text?.startsWith('mcp:'));
+  // The fake agent's mcp: reply can come after its chat starts: wait for it (as sprint-hooks does), do not read once (O277).
+  let hit;
+  for (let i = 0; i < 150 && !hit; i += 1) { hit = (await call(instance, `/chat/events?after=0&only=${conversation}`)).body.events.find((e) => e.data?.content?.text?.startsWith('mcp:')); if (!hit) await new Promise((r) => setTimeout(r, 200)); }
   assert.ok(hit, 'no mcp reply from ' + conversation);
   const [entry] = JSON.parse(hit.data.content.text.slice(4));
   const client = new Client({ name: 'p9-test', version: '1' });
