@@ -383,11 +383,14 @@ test('Phase 8: Dev Focus edits real files through the guarded save', { skip, tim
   // Nor does a read while the buffer is clean but stale (a same-size, same-mtime disk change VS Code's watcher cannot see):
   // the save basis is the text the editor shows, so an edit made on it is refused.
   const stale = path.join(instance.workspace, 'stale.txt');
+  // A whole-second time put back exactly: restoring a stat's Date drops the sub-millisecond part, the editor then sees the
+  // change and reloads the clean buffer, and the save after it is rightly allowed (failed once on CI, #583).
+  const when = new Date('2026-01-01T00:00:00Z');
   await writeFile(stale, 'disk version 1\n');
+  await utimes(stale, when, when);
   await dev.evaluate(() => window.devFocus.open('stale.txt'));
-  const staleBefore = await stat(stale);
   await writeFile(stale, 'other writer!!\n');
-  await utimes(stale, staleBefore.atime, staleBefore.mtime);
+  await utimes(stale, when, when);
   const stale4 = await dev.evaluate(async () => {
     const { v } = window.devFocus, editor = v.window.activeTextEditor, document = editor.document;
     await v.workspace.fs.readFile(document.uri);
