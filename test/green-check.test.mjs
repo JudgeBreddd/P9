@@ -19,6 +19,7 @@ const dir = process.env.FAKE_GH, route = process.argv.at(-1) || '';
 if (fs.existsSync(path.join(dir, 'fail'))) { process.stderr.write(fs.readFileSync(path.join(dir, 'fail'), 'utf8')); process.exit(1); }
 let m, name;
 if (/actions\\/runs\\?head_sha=/.test(route)) name = 'runs.json';
+else if (/commits\\/[0-9a-f]+\\/pulls/.test(route)) name = 'pulls.json';
 else if ((m = /actions\\/runs\\/(\\d+)\\/jobs/.exec(route))) name = 'jobs-' + m[1] + '.json';
 else if ((m = /actions\\/jobs\\/(\\d+)\\/logs/.exec(route))) name = 'log-' + m[1] + '.txt';
 const f = name && path.join(dir, name);
@@ -40,11 +41,12 @@ const LOG = [
 
 function run({ plan = PLAN, runs = [{ id: 1, name: 'test', status: 'completed', conclusion: 'success' }],
   jobs = [{ id: 11, name: 'ubuntu', conclusion: 'success' }, { id: 12, name: 'windows', conclusion: 'skipped' }],
-  logs = { 11: LOG }, jobsOf = {}, runsTotal, jobsTotal, fail = null, args, stdin } = {}) {
+  logs = { 11: LOG }, jobsOf = {}, runsTotal, jobsTotal, fail = null, args, stdin, pulls = [{ number: 5, state: 'open', draft: false }] } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'green-check-'));
   try {
     writeFileSync(join(dir, 'gh'), FAKE_GH); chmodSync(join(dir, 'gh'), 0o755);
     writeFileSync(join(dir, 'sprint.md'), plan);
+    writeFileSync(join(dir, 'pulls.json'), JSON.stringify(pulls));
     writeFileSync(join(dir, 'runs.json'), JSON.stringify({ total_count: runsTotal ?? runs.length, workflow_runs: runs }));
     for (const r of runs) { const j = jobsOf[r.id] ?? jobs; writeFileSync(join(dir, `jobs-${r.id}.json`), JSON.stringify({ total_count: jobsTotal ?? j.length, jobs: j })); }
     for (const [id, text] of Object.entries(logs)) writeFileSync(join(dir, `log-${id}.txt`), text);
@@ -81,7 +83,7 @@ test('green check refuses CI that is missing, pending or red, and a gh that fail
   refused(run({ runs: [] }), 'no CI run on abcdef12');
   refused(run({ runs: [{ id: 1, name: 'test', status: 'in_progress', conclusion: null }] }), 'is not complete (test)');
   refused(run({ runs: [{ id: 1, name: 'test', status: 'completed', conclusion: 'failure' }] }), 'is not green (test failure)');
-  refused(run({ fail: 'gh: Server Error (HTTP 500)\n' }), 'gh api repos/o/r/actions/runs failed (gh: Server Error (HTTP 500))');
+  refused(run({ fail: 'gh: Server Error (HTTP 500)\n' }), 'gh api repos/o/r/commits/' + SHA + '/pulls failed (gh: Server Error (HTTP 500))');
   refused(run({ logs: {} }), 'gh api repos/o/r/actions/jobs/11/logs failed');
   refused(run({ logs: { 11: '\n' } }), 'the log of CI job "ubuntu" is empty');
 });
@@ -184,4 +186,12 @@ test('green check ignores runs by hand: a green named run after red PR CI refuse
   const bare = run({ runs: [pr, byHand], jobsOf: { 1: [{ id: 11, name: 'linux (0)', conclusion: 'success' }], 2: [{ id: 21, name: 'bare (x64)', conclusion: 'success' }] }, logs: { 11: LOG, 21: 'bare install ok' } });
   assert.equal(bare.status, 0, bare.out);
   refused(run({ runs: [byHand], jobsOf, logs: { 21: LOG } }), 'no CI run on abcdef12');
+});
+
+// #574 pipeline re-read #2 (O293): a draft's run is green with every shard skipped, so it is no evidence for a merge.
+test('green check refuses a commit whose open PR is a draft; a closed draft or no PR at all does not', () => {
+  refused(run({ pulls: [{ number: 5, state: 'open', draft: true }] }), 'PR #5 on abcdef12 is a draft, so its CI ran quick only');
+  for (const pulls of [[], [{ number: 4, state: 'closed', draft: true }, { number: 5, state: 'open', draft: false }]]) {
+    const r = run({ pulls }); assert.equal(r.status, 0, r.out);
+  }
 });

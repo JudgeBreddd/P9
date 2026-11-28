@@ -1,6 +1,8 @@
 #!/bin/sh
 set -eu
-node scripts/scan.mjs
+# C2 (O287, O293): the quick checks first (package.json `quick`: licences, the secret and path scan, and the type check
+# once O295 lands). Not quick's convention tests: tests run in the dev space or CI, never on the pushing machine.
+pnpm -s quick
 # Only the commits this push adds (git gives one "<local ref> <local sha> <remote ref> <remote sha>" line per ref): main's
 # old history already holds test fixtures and notes that name private paths (H3, 0.1.8), so a grep of all history could
 # never pass. Only added lines count (a fix removing such a line still shows it). A deleted ref adds nothing; a new ref is checked against everything the remote already has.

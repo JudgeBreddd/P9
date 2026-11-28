@@ -80,6 +80,10 @@ async function main() {
   // C3 (O288), #574 r2-r4: every run on the commit must be complete and green, from any PR or event, except a run by hand
   // (workflow_dispatch: named files, bare, evidence), which diagnoses and is not the commit's CI. A cancelled run is not
   // green: marking a draft ready while its run is still going cancels it, and a re-run (same id, latest attempt) clears it.
+  // #574 pipeline re-read #2 (O293): a draft runs quick only, so its green run skipped every shard. An open draft PR on
+  // the commit refuses; marking it ready starts the full run, which this then waits for.
+  const drafts = json(`repos/${repo}/commits/${commit}/pulls?per_page=100`).filter((p) => p.state === 'open' && p.draft);
+  if (drafts.length) refuse(`item ${item}: PR #${drafts.map((p) => p.number).join(', #')} on ${commit.slice(0, 8)} is a draft, so its CI ran quick only; mark it ready (gh pr ready) and wait for the full run`);
   const runs = page(`repos/${repo}/actions/runs?head_sha=${commit}&per_page=100`, 'workflow_runs').filter((r) => r.event !== 'workflow_dispatch');
   if (!runs.length) refuse(`item ${item}: no CI run on ${commit.slice(0, 8)}`);
   const open = runs.filter((r) => r.status !== 'completed'), red = runs.filter((r) => r.status === 'completed' && r.conclusion !== 'success');

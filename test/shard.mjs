@@ -24,6 +24,17 @@ if (mode === 'pattern' || mode === 'quarantine') {
   console.log(mode === 'pattern' ? (mine.length ? `^(${mine.map((t) => esc(t.name)).join('|')})$` : '') : [...new Set(q.map((t) => t.file))].join(' '));
   process.exit(0);
 }
+// #573 r1 #4-#5 (O293): `report <log>` prints each entry's outcome in the quarantine job's log: passed (its P9_PASS line,
+// which names the file), failed (a ✖ line with its name), or no result, which is an entry whose test no longer runs.
+if (mode === 'report') {
+  const q = JSON.parse(readFileSync(new URL('quarantine.json', import.meta.url), 'utf8')), log = readFileSync(list[0], 'utf8').split('\n');
+  for (const t of q) {
+    const outcome = log.some((l) => l.includes(`P9_PASS ${t.file} :: ${t.name}`)) ? 'passed'
+      : log.some((l) => /^\s*✖ /.test(l.replace(/^\S+Z /, '')) && l.includes('✖ ' + t.name)) ? 'failed' : 'no result (the test did not run: fix the entry)';
+    console.log(`- ${outcome}: ${t.name} (${t.file}, ${t.row})`);
+  }
+  process.exit(0);
+}
 if (mode === 'quick') {
   console.log([...QUICK].sort().map((name) => 'test/' + name).join(' '));
   process.exit(0);

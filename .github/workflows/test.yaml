@@ -194,9 +194,12 @@ jobs:
           # retried. The quarantine shard exits 0; its summary says which tests failed.
           if [ "$SHARD" = quarantine ]; then
             QPAT=$(node test/shard.mjs pattern); QFILES=$(node test/shard.mjs quarantine)
-            P9_TIMED=1 run test/shell-bundle.test.mjs || true
-            if [ -n "$QFILES" ]; then run --test-name-pattern="$QPAT" $QFILES || true; fi
-            { echo '### Quarantined tests (not blocking)'; grep -E '^\s*(✔|✖) ' "$RUNNER_TEMP/tests.log" | grep -v 'failing tests' || echo 'no result lines'; } >> "$GITHUB_STEP_SUMMARY"
+            # #573 r1 #4 (O293): each call's exit code and each entry's outcome, so a call that dies before any result shows.
+            touch "$RUNNER_TEMP/tests.log"; timed=0; quarantined='none listed'
+            P9_TIMED=1 run test/shell-bundle.test.mjs || timed=$?
+            if [ -n "$QFILES" ]; then quarantined=0; run --test-name-pattern="$QPAT" $QFILES || quarantined=$?; fi
+            { echo '### Quarantined tests (not blocking)'; echo "- shell-bundle timing call: exit $timed"; echo "- quarantined tests call: exit $quarantined"
+              node test/shard.mjs report "$RUNNER_TEMP/tests.log"; grep -E '^\s*(✔|✖) ' "$RUNNER_TEMP/tests.log" | grep -v 'failing tests' || echo 'no result lines'; } >> "$GITHUB_STEP_SUMMARY"
             grep -E '^\s*(✔|✖) ' "$RUNNER_TEMP/tests.log" || true
             exit 0
           fi
