@@ -114,11 +114,11 @@ test('No ssh key, wrong password: the window says it did not work, Cancel stops,
 });
 
 // GitHub issue #566 (O296): the Which remote box starts empty, not on the ssh config's first Host (the box's own text
-// filtered the list, so Connect went to a machine nobody chose); every Host is offered.
-test('Setup wizard: the remote box starts empty with each ssh config Host offered', { skip, timeout: 90000 }, async (t) => {
+// filtered the list, so Connect went to a machine nobody chose); every Host is offered, and Connect uses the one picked.
+test('Setup wizard: the remote box starts empty with each ssh config Host offered, and Connect uses the one picked', { skip, timeout: 90000 }, async (t) => {
   const local = await daemon(t), s = await stage(await daemon(t));
   await mkdir(path.join(s.home, '.ssh'), { recursive: true });
-  await writeFile(path.join(s.home, '.ssh', 'config'), 'Host 192.168.68.79\n  User root\nHost icm-server\n  User p9\n');
+  await writeFile(path.join(s.home, '.ssh', 'config'), 'Host p9-alpha\n  User root\nHost p9-beta\n  User p9\n');
   const page = await launch(t, s, local, { HOME: s.home });
   await page.locator('#rChat').waitFor({ timeout: 20000 });
   await page.locator('#cards [data-key="welcome"] .open').click();
@@ -128,9 +128,16 @@ test('Setup wizard: the remote box starts empty with each ssh config Host offere
   const field = page.locator('#welBody #welHost');
   await field.waitFor({ timeout: 10000 });
   assert.equal(await field.inputValue(), '', 'no Host is picked for the person');
-  assert.deepEqual(await page.locator('#welHosts option').evaluateAll((o) => o.map((x) => x.value)), ['192.168.68.79', 'icm-server']);
+  assert.deepEqual(await page.locator('#welHosts option').evaluateAll((o) => o.map((x) => x.value)), ['p9-alpha', 'p9-beta']);
   await page.locator('#welBody [data-act="connect"]').click();
   await page.locator('#welBody [role="alert"]', { hasText: 'Type a Host name or user@address' }).waitFor({ timeout: 5000 });
+  // #579 r1: the second Host picked (a datalist choice fills the box as typing does); ssh is called for it, never the first.
+  await page.locator('#welBody #welHost').fill('p9-beta');
+  await page.locator('#welBody [data-act="connect"]').click();
+  const sshTo = async (host) => (await s.calls()).some((c) => c.argv?.includes(host));
+  for (let i = 0; i < 100 && !await sshTo('p9-beta'); i++) await page.waitForTimeout(200);
+  assert.equal(await sshTo('p9-beta'), true, 'Connect ran ssh for the Host picked');
+  assert.equal(await sshTo('p9-alpha'), false, 'and never for the first Host');
 });
 
 test('Setup wizard card 1: says what connecting offers, and connects to a new remote in the wizard, never through Settings', { skip, timeout: 120000 }, async (t) => {

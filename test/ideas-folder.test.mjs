@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdir, readFile } from 'node:fs/promises';
+import { mkdir, readFile, symlink } from 'node:fs/promises';
 import path from 'node:path';
 import { daemon, http, authenticated } from './helpers.mjs';
 
@@ -24,6 +24,16 @@ test('New idea: _ideas at the root, else the one _ideas one folder down; none or
   const two = await daemon(t, undefined, false, folders('a/_ideas', 'b/_ideas'));
   const refused = await idea(two, 'which');
   assert.equal(refused.status, 404); assert.match(refused.body?.error ?? '', /a\/_ideas, b\/_ideas/);
+
+  // #579 r1: a folder the writer refuses never counts: a root _ideas that is a link, a link one folder down, a locked folder's (secrets), an archive's.
+  const links = await daemon(t, undefined, false, async ({ workspace }) => {
+    await folders('notes/_ideas', 'elsewhere', 'secrets/_ideas', '_archive/_ideas', 'b')({ workspace });
+    await symlink(path.join(workspace, 'elsewhere'), path.join(workspace, '_ideas'));
+    await symlink(path.join(workspace, 'elsewhere'), path.join(workspace, 'b/_ideas'));
+    return {};
+  });
+  const skipped = await idea(links, 'skips links');
+  assert.deepEqual([skipped.status, skipped.body?.path], [201, 'notes/_ideas/skips-links.md']);
 
   const none = await daemon(t, undefined, false, folders('a'));
   const nowhere = await idea(none, 'nowhere');
