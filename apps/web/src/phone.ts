@@ -885,13 +885,13 @@ async function showChatFolders(at = '') {
     let result: Json, dirs: { path: string; name: string }[], parent: string | null;
     try {
       result = await request('/files/folders?' + new URLSearchParams({ path: at }));
-      pickChatWhole = true; pickChatAt = String(result.path); parent = result.parent ?? null; dirs = result.dirs;
+      pickChatWhole = true; pickChatAt = String(result.path); parent = (result.parent ?? null) as string | null; dirs = result.dirs as typeof dirs;
     } catch (error) {
       if (at && pickChatWhole) throw error;
       pickChatWhole = false; pickChatAt = at;
       result = await request('/files/list?' + new URLSearchParams({ path: at }));
       parent = at ? at.split('/').slice(0, -1).join('/') : null;
-      dirs = (result.entries ?? []).filter((entry: Json) => entry.dir).map((entry: Json) => ({ name: String(entry.name), path: [at, entry.name].filter(Boolean).join('/') }));
+      dirs = ((result.entries ?? []) as Json[]).filter((entry: Json) => entry.dir).map((entry: Json) => ({ name: String(entry.name), path: [at, entry.name].filter(Boolean).join('/') }));
     }
     openSheet('Start chat in', `<p>${escape(pickChatWhole ? pickChatAt : [pickChatWorkspace, pickChatAt].filter(Boolean).join('/'))}</p>${!pickChatWhole ? '<p>Only the workspace is available while a restriction is on.</p>' : ''}${parent !== null ? `<button class="quiet" data-chat-folder-at="${escape(parent)}">Up</button>` : ''}${dirs.map(d => `<button class="quiet" data-chat-folder-at="${escape(d.path)}">${escape(d.name)}</button>`).join('')}<button data-chat-folder-select>Use this folder</button>`);
   } catch { openSheet('Start chat in', '<p>Could not open that folder.</p><button class="quiet" data-chat-folder-at="">Back to workspace</button>'); }
@@ -1073,7 +1073,7 @@ function renderPicks(id: string) {
   const model = one<HTMLSelectElement>('#model'), options = config.model?.options ?? [];
   // MC-16: the option a new chat starts on says so, as on the desktop (the daemon's mark, above; not on a provider profile's
   // chat, nor on an option whose own name already says default).
-  const dflt = (name: string, value: string, marked: string | null | undefined) => name + (mark && marked === value && !/default/i.test(name) ? ' (Default)' : '');
+  const dflt = (name: string, value: string, marked: string | false | null | undefined) => name + (mark && marked === value && !/default/i.test(name) ? ' (Default)' : '');
   model.hidden = !options.length; model.dataset.current = config.model?.current ?? '';
   model.innerHTML = options.map((o) => `<option value="${escape(o.value)}"${o.value === config.model?.current ? ' selected' : ''}>${escape(dflt(o.name, o.value, mark && mark.model))}</option>`).join('');
   const restoredModel = swapModel.get(id); if (restoredModel && [...model.options].some(option => option.value === restoredModel)) { model.value = restoredModel; swapModel.delete(id); }
@@ -2194,7 +2194,7 @@ async function loadMission(cached = false) {
     const widgetRow = (w: string) => PHONE_WIDGET[w] ? `<p class="tile-row" data-widget="${escape(w)}"><button type="button" class="link" data-open="${PHONE_WIDGET[w]}">${escape(widgetLabel(w))}</button></p>`
       : `<p class="muted tile-row" data-widget="${escape(w)}">${w === 'usage' ? 'Usage has its own tab.' : w === 'notifications' ? 'Notifications show on the desktop.' : 'Edit names and icons on the desktop.'}</p>`;
     type Ref = { id: string; kind?: 'scripts' | 'apps' | 'pages'; title?: string; missing?: true };
-    for (const space of (data.space ?? []) as { id: string; title: string; text: string; widget?: string; widgets?: string[]; order?: string[]; logs: { id: string; title: string }[]; notes?: string; data?: { id: string; title: string }[]; cards?: { id: string; title: string }[]; links?: { url: string; title: string }[]; folders?: { id: string; title: string }[]; refs?: Ref[]; checklists?: { id: string; title: string }[] }[]) {
+    for (const space of (data.space ?? []) as { id: string; title: string; text: string; widget?: string; widgets?: string[]; order?: string[]; logs: { id: string; title: string }[]; notes?: string; data?: { id: string; title: string }[]; cards?: { id: string; title: string }[]; links?: { url: string; title: string }[]; folders?: { id: string; title: string; root?: string }[]; quick_note?: { root: string; path: string }; refs?: Ref[]; checklists?: { id: string; title: string }[] }[]) {
       const text = space.text ? [`<p class="muted" data-space-text>${escape(space.text)}</p>`] : [];
       // Notes (threat model row 34): the list loads when the row opens; a note opens in the file editor below.
       const folder = space.notes ? [row(`Notes<small>${escape(space.notes)}</small>`, `<div data-notes="${escape(space.notes)}"><p class="muted">Loading…</p></div>`)] : [];
@@ -2345,7 +2345,7 @@ one('#mission').addEventListener('click', async (event) => {
   if (act.arm) { list.innerHTML = checklistHtml(id, checklists[id], escape, checklistArmed); return; }
   button.disabled = true;
   let refused = '';
-  try { const done = await mutate('/mission/checklist', act.body); if (done.status >= 300) refused = String((done.body as { error?: string })?.error ?? done.status); }
+  try { const done = await mutate('/mission/checklist', act.body as Json); if (done.status >= 300) refused = String((done.body as { error?: string })?.error ?? done.status); }
   catch (error) { refused = (error as Error).message; }
   await loadChecklist(list);
   const reply = checklists[id] as { error?: string; note?: string };
@@ -2462,7 +2462,7 @@ one('#mission').addEventListener('click', async (event) => {
     build.disabled = true;
     const result = await mutate('/mission/build', { provider: build.dataset.build });
     build.disabled = false;
-    if (result.status === 201) openChat(result.body.conversation); else say(build.textContent + ': ' + (result.body?.error ?? result.status));
+    if (result.status === 201) openChat(result.body.conversation as string); else say(build.textContent + ': ' + (result.body?.error ?? result.status));
   }
   if (template) { tplPreview = template.dataset.template ?? null; chooseArmed = false; void loadMission(true); }
   if (target.closest('[data-preview-back]')) { tplPreview = null; chooseArmed = false; void loadMission(true); }
@@ -2676,7 +2676,7 @@ function drawUsage() {
   }
 }
 // Details (the sample counts) opens as it was left, whatever the Limits HTML was drawn with.
-function keepMore(root: HTMLElement) { const more = root.querySelector<HTMLDetailsElement>('details.more'); if (more) more.open = UH.more; }
+function keepMore(root: Element) { const more = root.querySelector<HTMLDetailsElement>('details.more'); if (more) more.open = UH.more; }
 let turnsRead = 0, usageRead = 0; // the newest read of each; an older answer that lands later is dropped
 async function readTurns() {
   const days = UH.days, seq = ++turnsRead; UH.reading = days;
@@ -2708,7 +2708,7 @@ one('#usage').addEventListener('click', (event) => {
 one('#usage').addEventListener('toggle', (event) => { const more = event.target as HTMLDetailsElement; if (more.matches('details.more')) UH.more = more.open; }, true);
 // Arrow keys, Home and End move between the tabs and open the one reached (the tablist pattern).
 one('#usage').addEventListener('keydown', (event) => {
-  const at = UTABS.findIndex(([id]) => id === (event.target as HTMLElement).dataset.utab), to = at < 0 ? undefined : { ArrowRight: at + 1, ArrowLeft: at + 2, Home: 0, End: 2 }[event.key];
+  const at = UTABS.findIndex(([id]) => id === (event.target as HTMLElement).dataset.utab), to = at < 0 ? undefined : ({ ArrowRight: at + 1, ArrowLeft: at + 2, Home: 0, End: 2 } as Record<string, number>)[(event as KeyboardEvent).key];
   if (to === undefined) return;
   event.preventDefault(); UH.tab = UTABS[to % 3][0]; drawUsage(); document.getElementById('utab-' + UH.tab)?.focus();
 });
@@ -2730,8 +2730,8 @@ let usageData: Usage | undefined;
 function usageLines(data: Usage) {
   // Plan limits (5 h and week used %): one card per agent in /usage limits (USE-1, helpers limitLines), named from GET /agents
   // (as text): its age, then a row per window with the pace tick (helpers.mjs paceRow).
-  const plan = (l: Json, window: Limits | null) => `<article class="plan${l.stale ? ' muted' : ''}" data-agent="${escape(l.id)}"><h2>${escape(l.name)} plan</h2><small>${escape(window ? 'Last read ' + l.text.split(' · ').at(-1).replace(/ old$/, ' ago') + (l.shared ? ' · shared plan with ' + l.shared : '') : l.text)}</small>${window ? planWindows(window).map(([label, w, mins]: [string, Window | null, number]) => paceRow(label, w, mins)).join('') : ''}</article>`;
-  const limits = data.limits ? `<div class="plans" data-limits>${limitLines(data.limits, names).map((l: Json) => plan(l, (data.limits as Json)[l.id])).join('')}</div>` : '';
+  const plan = (l: Json, window: Limits | null) => `<article class="plan${l.stale ? ' muted' : ''}" data-agent="${escape(l.id)}"><h2>${escape(l.name)} plan</h2><small>${escape(window ? 'Last read ' + (l.text as string).split(' · ').at(-1)!.replace(/ old$/, ' ago') + (l.shared ? ' · shared plan with ' + l.shared : '') : l.text)}</small>${window ? planWindows(window).map(([label, w, mins]: [string, Window | null, number]) => paceRow(label, w, mins)).join('') : ''}</article>`;
+  const limits = data.limits ? `<div class="plans" data-limits>${limitLines(data.limits, names).map((l: Json) => plan(l, (data.limits as Json)[l.id as string] as Limits | null)).join('')}</div>` : '';
   const shown = data.telemetryTab !== false; // set once the Limits below are built, so a malformed answer changes nothing
   if (data.state === 'unavailable') { UH.limits = limits + '<article class="card"><h2>No chat token records yet</h2><p>Token counts arrive when a P9 chat turn ends.</p></article>' + profileLines(data, 'muted'); UH.shown = shown; drawUsage(); return; }
   const stale = data.state === 'stale' ? '<article class="card warn"><h2>Stale usage</h2><p>The latest record is more than 15 minutes old.</p></article>' : '';
@@ -2853,7 +2853,7 @@ async function openFile(path: string, root?: string) {
     one('#openPath').textContent = path.split('/').pop()!; one<HTMLElement>('#openPath').title = path; one<HTMLElement>('#browser').hidden = true; one<HTMLElement>('#fileView').hidden = false;
     preview(!!root || /\.md$/i.test(path)); // O67: a Markdown file opens to read; Edit is in the bar's menu
     // review 3 L2: a _private note with File protection on reads, but its save would be refused
-    one('#fileState').textContent = state.file.readOnly ? 'Read-only: File protection is on' : 'Loaded'; one<HTMLElement>('#conflict').hidden = true;
+    one('#fileState').textContent = state.file?.readOnly ? 'Read-only: File protection is on' : 'Loaded'; one<HTMLElement>('#conflict').hidden = true;
     online(); syncSave();
     return true;
   } catch (error) {

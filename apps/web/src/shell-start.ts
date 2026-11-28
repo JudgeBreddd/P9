@@ -157,7 +157,7 @@ export function startShell() {
   // Asks again every 5 s until the daemon answers: asked once, the label said unavailable forever (issue #6 B3).
   const ask = () => void (window.p9?.getStatus() ?? Promise.resolve({ status: 'unavailable' as const }))
     .catch(() => ({ status: 'unavailable' as const }))
-    .then((result: { status: string; reason?: string; savedWorkspace?: string; workspace?: string; note?: [string, string]; mode?: string; host?: string; error?: string; install?: RemoteInstall; sshAsk?: SshAsk; keyOffer?: { id: number }; background?: boolean; slim?: boolean; ask?: boolean; keeping?: Keeping; agentsAsk?: Agent[]; agents?: Agents }) => {
+    .then((result: { status: string; reason?: string; savedWorkspace?: string; workspace?: string; note?: [string, string]; mode?: string; host?: string; error?: string; install?: RemoteInstall; sshAsk?: SshAsk; keyOffer?: { id: number }; background?: boolean; slim?: boolean; ask?: boolean; keeping?: Keeping; agentsAsk?: Agent[]; agents?: Agents; knownHosts?: { file: string; line: number }; library?: string }) => {
       const label = document.getElementById('daemonStatus'), disconnect = document.getElementById('disconnectBtn');
       // Remote mode asks every 5 s even when connected: a lost tunnel shows here, and main connects again on its own.
       if (result.mode === 'server') {

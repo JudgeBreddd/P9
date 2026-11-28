@@ -60,9 +60,9 @@ concurrency:
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
-  # C2 (O287): what a machine can see in 2 minutes, before any shard or Windows job starts: the licence inventory, the scan
-  # (gitleaks included) and the convention tests (node test/shard.mjs quick). No build, no browser. Astro check (`pnpm check`)
-  # is not here yet: main has 34 type errors (phone.ts, shell-start.ts, phone-errors.ts); row O295 fixes them and adds it.
+  # C2 (O287): what a machine can see in 2 minutes, before any shard or Windows job starts: the web app's type check (`pnpm check`,
+  # astro check, about 10 s; O295), the licence inventory, the scan (gitleaks included) and the convention tests
+  # (node test/shard.mjs quick). No build, no browser.
   quick:
     # Not on a run by hand naming files (#574 r2): those tests start at once, and a named convention test runs only once.
     if: ${{ !inputs.bare && !inputs.files }}
@@ -106,7 +106,10 @@ jobs:
         shell: bash
       # Each check runs even when one before it failed, so one red names every problem. O232: dependency-licenses.json
       # matches what is installed (Linux only: elsewhere optional platform packages read installed: false).
+      - name: Type check
+        run: pnpm check
       - name: Licence inventory
+        if: ${{ !cancelled() }}
         run: node scripts/licenses.mjs
       - name: Scan
         if: ${{ !cancelled() }}
