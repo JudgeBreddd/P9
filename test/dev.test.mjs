@@ -606,7 +606,7 @@ test('Dev Focus: Open Folder inside and outside the workspace', { skip, timeout:
   // Inside the workspace: File > Open Folder (the workbench's own command) opens it at once, with no question.
   await pick(path.join(instance.workspace, 'src'));
   page = nextPage();
-  await dev.evaluate(() => window.devFocus.v.commands.executeCommand('workbench.action.files.openFolder'));
+  await dev.evaluate(() => { window.devFocus.v.commands.executeCommand('workbench.action.files.openFolder'); }); // not awaited there: the open replaces this page, and an evaluate still waiting on it fails (O293)
   dev = await ready(await page);
   assert.deepEqual(await asked(), []);
   let config = await dev.evaluate(() => window.p9dev.config());
@@ -619,7 +619,7 @@ test('Dev Focus: Open Folder inside and outside the workspace', { skip, timeout:
   // Outside: one question naming the folder, then the editor shows it and saves land there, not in the workspace.
   await pick(outside);
   page = nextPage();
-  await dev.evaluate(() => window.devFocus.v.commands.executeCommand('workbench.action.files.openFolder'));
+  await dev.evaluate(() => { window.devFocus.v.commands.executeCommand('workbench.action.files.openFolder'); }); // not awaited there: the open replaces this page, and an evaluate still waiting on it fails (O293)
   dev = await ready(await page);
   assert.deepEqual(await asked(), ['Open ' + outside + ' in Dev Focus?']);
   config = await dev.evaluate(() => window.p9dev.config());
