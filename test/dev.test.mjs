@@ -364,15 +364,15 @@ test('Phase 8: Dev Focus edits real files through the guarded save', { skip, tim
   assert.equal(drafts.length, 1);
   assert.match(await readFile(path.join(instance.recovery, drafts[0]), 'utf8'), /editor draft 2/);
   // A read of the file while the draft is unsaved (a diff, an extension) does not move the hash the draft was based on.
-  const reread = path.join(instance.workspace, 'reread.txt');
+  const reread = path.join(instance.workspace, 'reread.txt'), when = new Date('2026-01-01T00:00:00Z'); // put back exactly, below
   await writeFile(reread, 'disk version 1\n');
+  await utimes(reread, when, when);
   await dev.evaluate(async () => {
     const { v, open } = window.devFocus, editor = await open('reread.txt');
     await editor.edit(edit => edit.replace(new v.Range(0, 0, editor.document.lineCount, 0), 'editor draft 3\n'));
   });
-  const rereadBefore = await stat(reread);
   await writeFile(reread, 'other writer!!\n');
-  await utimes(reread, rereadBefore.atime, rereadBefore.mtime);
+  await utimes(reread, when, when);
   const reread3 = await dev.evaluate(async () => {
     const { v } = window.devFocus, document = v.window.activeTextEditor.document;
     await v.workspace.fs.readFile(document.uri);
@@ -385,7 +385,6 @@ test('Phase 8: Dev Focus edits real files through the guarded save', { skip, tim
   const stale = path.join(instance.workspace, 'stale.txt');
   // A whole-second time put back exactly: restoring a stat's Date drops the sub-millisecond part, the editor then sees the
   // change and reloads the clean buffer, and the save after it is rightly allowed (failed once on CI, #583).
-  const when = new Date('2026-01-01T00:00:00Z');
   await writeFile(stale, 'disk version 1\n');
   await utimes(stale, when, when);
   await dev.evaluate(() => window.devFocus.open('stale.txt'));
@@ -394,11 +393,13 @@ test('Phase 8: Dev Focus edits real files through the guarded save', { skip, tim
   const stale4 = await dev.evaluate(async () => {
     const { v } = window.devFocus, editor = v.window.activeTextEditor, document = editor.document;
     await v.workspace.fs.readFile(document.uri);
+    const shown = document.getText(); // still the old text: the change was not seen (#583 r2)
     await editor.edit(edit => edit.replace(new v.Range(0, 0, document.lineCount, 0), 'editor draft 4\n'));
-    return { saved: await document.save().catch(error => 'threw: ' + error.message), dirty: document.isDirty };
+    return { shown, saved: await document.save().catch(error => 'threw: ' + error.message), dirty: document.isDirty };
   });
+  assert.equal(stale4.shown, 'disk version 1\n', 'the editor reloaded the buffer before the edit: the test, not the guard (#584 r1)');
   assert.equal(await readFile(stale, 'utf8'), 'other writer!!\n');
-  assert.deepEqual(stale4, { saved: false, dirty: true });
+  assert.deepEqual(stale4, { shown: 'disk version 1\n', saved: false, dirty: true });
 
   stage('// Creating a file'); // New files go through the create-only route: a new name is made, then saves like any opened file;
   // a name already on disk is replaced by a guarded save (Save As after Replace), and a locked name is refused while File protection is on.
@@ -805,7 +806,8 @@ test('Event Horizon Azure: Dev Focus paints the review fixture in the theme; fen
     const shown = await v.window.showTextDocument(editor.document, { viewColumn: editor.viewColumn, preserveFocus: false });
     // The token checks above scroll the file; an off-screen cursor is not drawn (width 0), so bring it back into view.
     // O293: the editor draws it on a later frame; 400 ms was sometimes too soon on CI (width 0, display none). Up to 5 s.
-    const drawn = () => document.querySelector('.editor-group-container .monaco-editor.focused .cursor')?.getBoundingClientRect().width > 0;
+    const group = () => [...document.querySelectorAll('.editor-group-container')].find(g => g.querySelector('.tab.active')?.textContent.includes(name));
+    const drawn = () => group()?.querySelector('.monaco-editor.focused .cursor')?.getBoundingClientRect().width > 0; // this group's: the last one's can still show (#583 r2)
     shown.revealRange(shown.selection, v.TextEditorRevealType.AtTop); // once: a cursor that needs a second reveal fails (#583 r1)
     let waited = 0;
     for (; waited < 5000 && !drawn(); waited += 200) await new Promise(resolve => setTimeout(resolve, 200));
