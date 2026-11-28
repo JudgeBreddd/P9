@@ -49,7 +49,7 @@ export function commentButton({ range, raw, view, host = document.body, pick, al
   return b;
 }
 // edit: the chip whose pencil this box is; leaving it saves any change to the comment, a cleared one too.
-export function quoteBox({ rect, text: whole, raw = whole, comment = '', edit = null, add, host = document.body, back, alive = () => true }) {
+export function quoteBox({ rect, text: whole, raw = whole, comment = '', edit = /** @type {any} */ (null), add, host = document.body, back, alive = () => true }) {
   pop?.();
   shut?.();
   const text = whole.length > MAX ? whole.slice(0, MAX) + '…' : whole, id = 'quote-' + ++n;

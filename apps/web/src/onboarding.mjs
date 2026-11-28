@@ -3,7 +3,7 @@ import { PROTECT_AFTER } from '../../../packages/protocol/index.mjs';
 // and the phone. esc is the caller's escaper. Every word is P9's own; template names, titles, space names and the agents' names
 // (CAT-1h: agents, [{ id, name }], one build button each; the phone gives none) come from the daemon.
 // protect: File protection is on, so an agent cannot write the space yet: say so, with a button to that setting.
-export function onboardCard({ templates = [], spaces = [], current = null, protect = false, agents = [{ id: 'claude', name: 'Claude' }, { id: 'codex', name: 'Codex' }] }, esc) {
+export function onboardCard({ templates = /** @type {any[]} */ ([]), spaces = [], current = null, protect = false, agents = [{ id: 'claude', name: 'Claude' }, { id: 'codex', name: 'Codex' }] }, esc) {
   return '<section class="onboard" data-onboard aria-labelledby="onboardTitle">'
     + '<h3 id="onboardTitle">Build your Mission Control</h3>'
     + '<p>Mission Control is your control room: buttons that run your scripts, live numbers, log views, notes and links, in sections you choose. It is empty for now.</p>'
