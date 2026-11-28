@@ -283,7 +283,7 @@ const LIST_MIN = 170, LIST_START = 300; // the editor's narrowest file list, and
 let devFiles = null, devWide = null, devKept = null;
 const devOnly = () => S.focus === 'dev' && devFiles?.tabs === 0 && !!side.current() && side.current().mode !== 'full';
 const devBeside = () => {
-  if (!devOnly()) { devWide = null; return null; }
+  if (!devOnly()) return null;
   const least = devFiles.rest + (devFiles.list ? LIST_MIN : 0), most = devFiles.list ? Math.max(least, $('.stage').clientWidth - SIDE_GAP - SIDE_MIN) : least;
   const fit = px => Math.round(Math.max(least, Math.min(most, px)));
   devWide ??= devFiles.rest + devFiles.list;
@@ -314,7 +314,7 @@ function devFilesSaid(state) {
     if (had.list && !state.list) { devKept = devWide; devWide = state.rest; }
     else if (!had.list && state.list) devWide = devKept ?? state.rest + Math.max(state.list, LIST_START);
   }
-  side.apply(); // its listeners place the view
+  if (side.current()) side.apply(); // its listeners place the view; with no panel nothing changes
 }
 window.p9?.onDevFiles?.(devFilesSaid);
 if (sampleView) window.__side = side; // ponytail: the UI test's door to the panel (sample data is handed in only by tests, never in a packaged build)
@@ -797,6 +797,7 @@ function placeDev() {
   }
   if (visible) devRect = { x: Math.round(x), y: Math.round(y), width: Math.round(Math.max(0, right - x)), height: Math.round(Math.max(0, bottom - y)) };
   // O294: only tells the editor page it is shown files-only; the answer carries what that page last said, for a shell loaded after it.
+  if (!devOnly()) devWide = null; // the next files-only starts from what the editor shows then
   $('#devTab .stab').textContent = devOnly() ? 'Files' : 'Editor';
   return Promise.resolve(window.p9.devView(visible ? { visible, ...devRect, only: devOnly() } : { visible })).then(answer => {
     if (answer && 'files' in answer && JSON.stringify(answer.files) !== JSON.stringify(devFiles)) devFilesSaid(answer.files);

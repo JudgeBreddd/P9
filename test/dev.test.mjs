@@ -995,6 +995,7 @@ test('O294: no editor tab and the chat beside: the file list and the chat, no ed
   // A reloaded shell learns what the editor shows from main: still the file list and the chat.
   await shell.reload();
   await shellReady(shell);
+  await shell.keyboard.press('Control+2'); // a loaded shell starts in Chat Focus
   got = await until('after a shell reload', g => filesOnly(g) && g.list === start && g.chat > 0);
   // A file from the list brings the editor area back beside the same file list, the 220 px minimum with it.
   await dev.locator('.explorer-folders-view .monaco-list-row', { hasText: 'note.txt' }).first().dblclick();
