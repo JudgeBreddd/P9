@@ -702,8 +702,9 @@ canvas.pet{image-rendering:pixelated;cursor:grab;touch-action:none;pointer-event
 .stage.tabdrag{cursor:grabbing;user-select:none}
 /* O294: the editor area closed. The editor view keeps only the file list (348 px: the activity bar and a 300 px list) and the
    side panel takes the rest, so its drag bar rests. */
-.shell[data-focus=dev] .stage[data-dev-closed][data-side=right]:not([data-side-mode=full]){grid-template-columns:348px minmax(0,1fr)}
-.shell[data-focus=dev] .stage[data-dev-closed][data-side=left]:not([data-side-mode=full]){grid-template-columns:minmax(0,1fr) 348px}
+/* O294: 348 px of file list plus the 8 px placeDev keeps between the view and the side panel. */
+.shell[data-focus=dev] .stage[data-dev-closed][data-side=right]:not([data-side-mode=full]){grid-template-columns:356px minmax(0,1fr)}
+.shell[data-focus=dev] .stage[data-dev-closed][data-side=left]:not([data-side-mode=full]){grid-template-columns:minmax(0,1fr) 356px}
 .shell[data-focus=dev] .stage[data-dev-closed] .side .handle-v{pointer-events:none}
 #devTab #devClose{margin-right:6px}
 .stage[data-side-mode=full]{grid-template-columns:minmax(0,1fr)}
