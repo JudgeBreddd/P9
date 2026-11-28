@@ -468,7 +468,7 @@ const pausedTurnEnd = async (t, full) => {
   assert.equal(await got('lead-first'), false, 'the lead\'s message ran while the sprint was paused');
   if (full) { // refused by name and handed back to its sender (sprint-paused-full); the 100 kept go at Resume, as the cap test shows
     const back = (await events(instance, w1)).filter((e) => e.type === 'unheld' && e.data.text === 'lead-first');
-    assert.deepEqual(back.map((e) => [e.data.why, typeof e.data.from]), [['sprint-paused-full', 'string']], 'the lead\'s message was not handed back to it by name: ' + JSON.stringify(back));
+    assert.deepEqual(back.map((e) => [e.data.why, e.data.from]), [['sprint-paused-full', lead.conversation]], 'the lead\'s message was not handed back to it by name: ' + JSON.stringify(back));
     return;
   }
   // Kept, not lost: Resume sends it.

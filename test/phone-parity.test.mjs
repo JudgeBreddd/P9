@@ -237,7 +237,6 @@ test('O246: the phone\'s "As set" sends the mode it shows with the message, the 
   assert.deepEqual(await sent('third'), ['Plan', 202], 'under the lock: the mode it shows (an unlock before its turn does not widen it), and the send is taken');
   await echoed('echo:third');
   // Round 4: the unlock's mode and a turn's end come in one poll; the redraw waits on the relist. A tap then sends what it shows.
-  // Round 4: the unlock's mode and a turn's end come in one poll; the redraw waits on the relist. A tap then sends what it shows.
   // Both routes stay on, passing through once done: a route taken off can turn interception off, which lets a held request go.
   let holdPoll = true, holdList = false, caught, release, listed, open;
   const polled = new Promise((r) => { caught = r; }), gate = new Promise((r) => { release = r; });
@@ -247,8 +246,16 @@ test('O246: the phone\'s "As set" sends the mode it shows with the message, the 
   await polled; // the poll before the route has answered (at most its 8 s wait); this one waits for both events
   assert.equal((await server.desk('/agent-lock', 'POST', { on: false })).status, 200);
   assert.equal((await server.desk('/chat/' + id + '/prompt', 'POST', { text: 'quiet', op: crypto.randomUUID() })).status, 202);
-  for (let i = 0; i < 100; i += 1) { const { body } = await server.desk('/chat/events?after=0'); if ((body.events ?? []).some((e, n, all) => e.type === 'user' && JSON.stringify(e.data).includes('quiet') && all.slice(n).some((x) => x.type === 'turn-end' && x.conversation === id))) break; await new Promise((r) => setTimeout(r, 100)); }
+  // Both must be in the daemon before the poll goes, or the poll would not carry them together.
+  const both = (all) => { const mine = all.filter((e) => e.conversation === id), at = mine.findIndex((e) => e.type === 'user' && JSON.stringify(e.data).includes('quiet'));
+    return at >= 0 && mine.slice(at).some((e) => e.type === 'turn-end') && mine.findLast((e) => e.type === 'mode')?.data?.name === 'Manual'; };
+  let ready = false;
+  for (let i = 0; i < 100 && !ready; i += 1) { ready = both((await server.desk('/chat/events?after=0')).body.events ?? []); if (!ready) await new Promise((r) => setTimeout(r, 100)); }
+  assert.ok(ready, 'the unlock\'s mode and the quiet turn\'s end never both reached the daemon');
+  const carried = page.waitForResponse(async (r) => new URL(r.url()).pathname === '/chat/events'
+    && ((await r.json().catch(() => null))?.events ?? []).some((e) => e.conversation === id && e.type === 'mode' && e.data?.name === 'Manual'), { timeout: 10000 });
   holdPoll = false; holdList = true; release(); await relisting;
+  await carried; // the poll the phone took in did carry the unlock, so the cache has it while the screen does not
   assert.equal(await page.$eval('#mode option', (el) => el.textContent), 'Mode: Plan', 'not redrawn yet');
   assert.deepEqual(await sent('fourth'), ['Plan', 202], 'the mode it shows, not the unlock\'s still to be drawn');
   open(); await echoed('echo:fourth');
