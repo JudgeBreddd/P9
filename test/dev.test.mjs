@@ -803,8 +803,9 @@ test('Event Horizon Azure: Dev Focus paints the review fixture in the theme; fen
     // The token checks above scroll the file; an off-screen cursor is not drawn (width 0), so bring it back into view.
     // O293: the editor draws it on a later frame; 400 ms was sometimes too soon on CI (width 0, display none). Up to 5 s.
     const drawn = () => document.querySelector('.editor-group-container .monaco-editor.focused .cursor')?.getBoundingClientRect().width > 0;
+    shown.revealRange(shown.selection, v.TextEditorRevealType.AtTop); // once: a cursor that needs a second reveal fails (#583 r1)
     let waited = 0;
-    for (; waited < 5000 && !drawn(); waited += 200) { shown.revealRange(shown.selection, v.TextEditorRevealType.AtTop); await new Promise(resolve => setTimeout(resolve, 200)); }
+    for (; waited < 5000 && !drawn(); waited += 200) await new Promise(resolve => setTimeout(resolve, 200));
     const groups = [...document.querySelectorAll('.editor-group-container')], mine = groups.find(g => g.querySelector('.tab.active')?.textContent.includes(name)), other = groups.find(g => g !== mine);
     // The focused editor's own cursor: a group can hold other editors' hidden ones (O293: width 0 on CI).
     const cursors = [...mine.querySelectorAll('.cursor')], cursor = mine.querySelector('.monaco-editor.focused .cursor') ?? cursors[0], line = mine.querySelector('.tab.active > .tab-border-top-container');
@@ -1039,13 +1040,26 @@ test('O294: no editor tab and the chat beside: the file list and the chat, no ed
   await shell.click('#side [data-side-swap]');
   await until('both bars hidden, the chat on the right', g => bare(g) && g.chatLeft > g.view.x);
   await hide(false);
-  got = await until('the bars back', g => filesOnly(g) && g.chat > 0);
+  got = await until('the bars back', g => filesOnly(g) && g.chat > 0 && g.list === start + 50); // it came back 2 px narrower once (#583 r1)
   // The chat closed with no tab open: the view goes whole and the file list keeps its width.
   const wide = got.list;
   await shell.click('#sideToggle');
   await until('the chat off from the file list', g => g.tabs === 0 && g.chat === 0 && whole(g) && g.list === wide);
   await shell.click('#sideToggle');
   await until('the chat on again', g => filesOnly(g) && g.list === wide && g.chat > 0);
+  // The whole editor's own edge resizes the file list (the chat off): the chat back on keeps that width, not the old one (#583 r1).
+  await shell.click('#sideToggle');
+  await until('the chat off before the edge', g => g.tabs === 0 && g.chat === 0 && whole(g) && g.list === wide);
+  await dev.evaluate(px => { const { layout } = window.devFocus, h = layout.getSize('workbench.parts.sidebar').height; layout.setSize('workbench.parts.sidebar', { width: px, height: h }); }, wide + 40);
+  await until('the editor edge moved 40', g => g.tabs === 0 && g.chat === 0 && whole(g) && g.list === wide + 40);
+  await shell.click('#sideToggle');
+  await until('the chat on after the edge', g => filesOnly(g) && g.list === wide + 40 && g.chat > 0);
+  await shell.click('#sideToggle');
+  await until('the chat off, the edge back', g => g.chat === 0 && whole(g));
+  await dev.evaluate(px => { const { layout } = window.devFocus, h = layout.getSize('workbench.parts.sidebar').height; layout.setSize('workbench.parts.sidebar', { width: px, height: h }); }, wide);
+  await until('the editor edge back', g => g.tabs === 0 && g.chat === 0 && whole(g) && g.list === wide);
+  await shell.click('#sideToggle');
+  await until('the chat on, the old width', g => filesOnly(g) && g.list === wide && g.chat > 0);
   // Zoomed in (what Settings does to the shell and the editor page): the view's width in the window's pixels is no longer the
   // page's own width, and the file list still takes what the divider gives it (#581 r2). The keys move the divider 24 a press.
   const zoom = z => app.evaluate(({ webContents }, z) => { for (const w of webContents.getAllWebContents()) if (/^p9:\/\/(app|dev)\//.test(w.getURL())) w.setZoomFactor(z); }, z);
@@ -1081,7 +1095,7 @@ test('O294: no editor tab and the chat beside: the file list and the chat, no ed
     await dev.waitForFunction(() => window.devFocusReady, null, { timeout: 120000 });
     await until('rebuilt after crash ' + round, g => g.tabs === 0 && g.chat === 0 && whole(g));
     await shell.click('#sideToggle');
-    await until('the chat on after crash ' + round, g => filesOnly(g) && g.chat > 0);
+    await until('the chat on after crash ' + round, g => filesOnly(g) && g.chat > 0 && g.list === wide); // it came back 306 once (#583 r1)
   }
   // A restart (the same daemon and profile): a fresh editor page says what it shows, with a tab open and with none.
   await dev.evaluate(() => window.devFocus.open('note.txt'));
