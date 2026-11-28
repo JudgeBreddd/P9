@@ -2,23 +2,11 @@
 // (tag v<version>), which the popup links to. A release updates this list with package.json's version
 // (test/whats-new.test.mjs fails while the two differ); for another version the popup shows only the link.
 export const WHATS_NEW = {
-  version: '0.1.9-beta.17',
+  version: '0.1.9-beta.18',
   changes: [
-    "Queued messages from you, P9 and other chats run in separate turns.",
-    "Phone: As set sends the mode shown when you tap Send, even if a turn ends before the picker redraws.",
-    "Agent lock: a prompt goes only once read-only mode is confirmed; a message that would steer waits for the turn to end.",
-    "Desktop chat: between turns, Set again restores an active goal after a restart, and Clear removes it.",
-    "Worker window: item names and replies wrap; Details has Open chat and shows tokens used and context.",
-    "Phone: an unanswered send stays on its own card with Send again and Take back, apart from your next draft.",
-    "Phone: files from an accepted send no longer come back in the message box after a reload.",
-    "Phone: Chats opens while agent details load. Back stays available while chat history loads or if it fails to load.",
-    "Dev Focus on this computer keeps its open files and file tree when P9 restarts.",
-    "Remote: a window opened before the remote answered fills in place instead of reloading.",
-    "Desktop chat: background agents' tool rows no longer split a reply into separate blocks.",
-    "Desktop chat: turns that end in the same chat in one refresh show at most one finished notice.",
-    "P9 starts stopping an agent after 30 seconds without an answer to a mode, model or effort change.",
-    "Settings: Unrestricted reads a change back after a lost reply, and a revision check guards newer changes.",
-    "Sprint Close tells the chats that sent messages to held workers which ones were not delivered.",
-    "Sprints: third-fix notices name larger model families when known, and skip upgrade advice at the top.",
+    "Dev Focus: closing the last file tab gives the chat the editor space when the chat is beside the file list.",
+    "Dev Focus: beside the chat with no tabs open, the divider sizes the file list; opening a file restores the split.",
+    "Dev Focus: beside the chat with no tabs open, the command palette fits inside the file pane.",
+    "Phone: a file closed or replaced while the editor loads it no longer shows Loaded.",
   ],
 };
