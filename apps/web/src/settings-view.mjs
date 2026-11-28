@@ -529,7 +529,7 @@ async function firstRun() {
   if (!s || welSkipped() || !Object.values(setupDone(s)).includes(false)) return tour();
   W.then = tour; welcome(0);
 }
-const W = { i: 0, s: null, login: {}, timer: 0, note: {}, code: '', name: null, busy: '', then: null, paths: null, picked: null, have: null };
+const W = { i: 0, s: null, login: {}, timer: 0, note: {}, code: '', name: null, busy: '', then: null, paths: null, picked: null, have: null, host: '' };
 // The paths the wizard would write: the owner's edits, else what the daemon proposed (what it found, filled in with the
 // starter paths). Empty fields are left out.
 const wizPaths = () => Object.fromEntries(Object.entries(W.paths || (W.s?.conflict ? W.s.proposed : W.s?.found) || {}).filter(([k, v]) => PATH_KEYS.some(([key]) => key === k) && v));
@@ -541,7 +541,7 @@ const wizSteps = () => ['welcome', 'workspace', 'pick', 'agents', ...(W.s?.tmux 
 // signed in; the step believes the chat until a sign-in started here ends well.
 async function welcome(at, agent, stale) {
   if (!window.p9?.chat) return; // a browser preview has no daemon to set up
-  Object.assign(W, { note: {}, code: '', name: null, busy: '', paths: null, have: null, remote: false, hosts: null, picked: null, stale: stale ? agent : null, began: null });
+  Object.assign(W, { note: {}, code: '', name: null, busy: '', paths: null, have: null, remote: false, hosts: null, picked: null, stale: stale ? agent : null, began: null, host: '' });
   W.s = await loadSetup();
   await wizAgents();
   if (agent) W.picked = [...new Set([...wizPicked(), agent])];
@@ -609,7 +609,7 @@ const WIZ_ERR = {
 function wizRemote(btn) {
   const h = W.hosts, hosts = [...new Set([...(h?.remotes || []), ...(h?.hosts || [])])], opts = hosts.map(x => '<option value="' + esc(x) + '"></option>').join('');
   return '<div data-wiz-remote>'
-    + `<div class="set-row"><span><strong>Which remote</strong><span class="muted sm">A Host name from your ssh config, or user@address. If ssh asks for a password, P9 asks you for it in its own window and never saves it.</span></span><span class="spacer"></span><input data-slot="input" id="welHost" list="welHosts" value="${esc(h?.last || hosts[0] || '')}" placeholder="user@address" aria-label="Remote to connect to" maxlength="253" autocomplete="off" spellcheck="false"><datalist id="welHosts">${opts}</datalist>${btn('connect', 'Connect', 'default')}</div>`
+    + `<div class="set-row"><span><strong>Which remote</strong><span class="muted sm">A Host name from your ssh config, or user@address. If ssh asks for a password, P9 asks you for it in its own window and never saves it.</span></span><span class="spacer"></span><input data-slot="input" id="welHost" list="welHosts" value="${esc(W.host || '')}" placeholder="${esc(h?.last || hosts[0] || 'user@address')}" aria-label="Remote to connect to" maxlength="253" autocomplete="off" spellcheck="false"><datalist id="welHosts">${opts}</datalist>${btn('connect', 'Connect', 'default')}</div>`
     + (W.note.remote?.error ? `<p class="warn sm" role="alert">${W.note.remote.error === 'host' ? 'Type a Host name or user@address, with no spaces.' : 'Could not connect (' + esc(W.note.remote.error) + ').'}</p>` : '') + '</div>';
 }
   return { saveSettings, applySettings, settingsAt, renderSettings, refreshDefaults, loadSetup, setupDone, welSkipped, AGENTS_PICK, wizPicked, wizReady, ADMIN_NAMES, STEP_NAMES, checkSetup, skipWelcome, tour, firstRun, W, wizPaths, wizChoosing, wizSteps, welcome, wizRefresh, WIZ_ERR, wizRemote };

@@ -1178,6 +1178,7 @@ function wizRender() {
   morph($('#welFoot'), (W.i ? btn('back', 'Back') : '') + '<span class="spacer"></span>' + (W.i === steps.length - 1 ? btn('close', 'Close') : btn('skip', 'Skip')) + next);
 }
 $('#welDlg').addEventListener('input', e => { if (e.target.id === 'welCode') W.code = e.target.value; if (e.target.id === 'welName') W.name = e.target.value;
+  if (e.target.id === 'welHost') W.host = e.target.value;
   if (e.target.dataset.path) W.paths = { ...wizPaths(), [e.target.dataset.path]: e.target.value.trim() }; });
 $('#welDlg').addEventListener('change', e => { if (e.target.dataset.path) wizRefresh(); });
 $('#welDlg').addEventListener('toggle', e => { if (e.target.matches?.('[data-have]')) W.have = e.target.open; }, true);
@@ -1195,7 +1196,7 @@ $('#welDlg').addEventListener('click', async e => {
   if (act === 'close') return $('#welDlg').close();
   if (act === 'mission-open') { $('#welDlg').close(); setFocus('mission'); if (!live.empty) { live.adding = true; live.preview = null; } return renderMission(); }
   if (act === 'docs') return window.p9.openDocs('buttons-apps-and-pages').catch(() => {}); // RH2
-  if (act === 'remote' || act === 'remote-retry') { W.remote = act === 'remote-retry' || !W.remote; if (W.remote) W.hosts = await window.p9.server().catch(() => null); return wizRender(); }
+  if (act === 'remote' || act === 'remote-retry') { W.remote = act === 'remote-retry' || !W.remote; if (W.remote) { if (act === 'remote') W.host = ''; W.hosts = await window.p9.server().catch(() => null); } return wizRender(); }
   if (act === 'connect') {
     const host = $('#welHost')?.value.trim() ?? '';
     if (!/^[A-Za-z0-9_][A-Za-z0-9_.@-]{0,252}$/.test(host)) { W.note.remote = { error: 'host' }; return wizRender(); } // remote.mjs HOST
