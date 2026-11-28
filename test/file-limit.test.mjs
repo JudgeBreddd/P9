@@ -13,7 +13,7 @@ const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 // Tests line has them. On main's line both were silent (only '✔ ok a' after 30 s).
 const ciFlags = async () => {
   const yaml = await readFile(path.join(root, '.github', 'workflows', 'test.yaml'), 'utf8');
-  const line = yaml.split('\n').find((text) => text.includes('scripts/with-tmp.mjs node --test'));
+  const line = yaml.split('\n').find((text) => text.trim().startsWith('run() {') && text.includes('--test-reporter=./test/file-limit.mjs')); // the shards' run(), not quick's line (#574 r1 gave quick the same reporters)
   assert.ok(line, 'the Linux Tests line in test.yaml');
   // C1 (O286): the flags now sit in the step's run() function, which takes its files as "$@".
   const end = line.includes('"$@"') ? line.indexOf('"$@"') : line.indexOf('$FILES');

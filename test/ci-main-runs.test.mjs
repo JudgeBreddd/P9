@@ -31,8 +31,9 @@ const run = (ref, id, inputs) => {
 };
 
 test('O230: a merge to main starts Tests, and quick merges each finish with their own result', () => {
+  // C3 (O288): pushes run on main only (a branch is tested by its PR), so main must be in the list.
   const push = block('push', 2);
-  assert.ok(!push.some((line) => /branches(-ignore)?:/.test(line)), `the push trigger leaves out no branch, main included: ${push.join('\n')}`);
+  assert.ok(push.some((line) => line.trim() === 'branches: [main]'), `the push trigger runs on main: ${push.join('\n')}`);
 
   const [a, b, c] = [run('refs/heads/main', 101), run('refs/heads/main', 102), run('refs/heads/main', 103)];
   assert.equal(a.cancel, 'false', 'a run on main cancels nothing');
@@ -42,4 +43,28 @@ test('O230: a merge to main starts Tests, and quick merges each finish with thei
   assert.equal(x.cancel, 'true', 'on a branch a new push still cancels the run it replaces');
   assert.equal(x.group, y.group, 'two pushes to one branch share a group');
   assert.notEqual(x.group, run('refs/heads/o-fix', 203, { bare: true }).group, 'a bare run keeps its own group');
+});
+
+test('C3: every PR runs Tests (no paths filter), a draft runs only quick, and marking it ready starts the rest', () => {
+  const pr = block('pull_request', 2);
+  assert.ok(pr.some((line) => line.trim() === 'types: [opened, synchronize, reopened, ready_for_review]'), pr.join('\n'));
+  assert.ok(!pr.some((line) => /^\s*paths(-ignore)?:/.test(line)), 'no paths filter on pull_request: a required check that never reports holds a Markdown-only PR forever');
+  for (const job of ['linux', 'windows']) {
+    const body = block(job, 2);
+    assert.ok(body.some((line) => line.trim() === 'needs: quick'), `${job} waits for quick`);
+    const cond = body.find((line) => line.trim().startsWith('if:'));
+    assert.match(cond, /needs\.quick\.outputs\.heavy == 'true' && !github\.event\.pull_request\.draft/, `${job}: ${cond}`);
+    // #574 r1 blocker 4: a run by hand naming files (Linux) or asking for Windows runs whatever quick says, so a red quick
+    // cannot hide the test being diagnosed; every other run needs quick green (!cancelled() lets the condition decide).
+    assert.match(cond, /^\s*if: \$\{\{ !cancelled\(\) && /, `${job}: ${cond}`);
+    assert.match(cond, job === 'linux' ? /\(inputs\.files != '' && inputs\.files != null \|\| needs\.quick\.result == 'success' && / : /\(inputs\.windows \|\| needs\.quick\.result == 'success' && /, `${job}: ${cond}`);
+  }
+  // #574 r1 blocker 2: quick's tests write the shards' P9_PASS lines, so a plan row naming one can pass the sprint gate.
+  const quick = block('quick', 2).join('\n');
+  // #574 r2: a run by hand naming files skips quick, so those tests start at once.
+  assert.ok(quick.includes('if: ${{ !inputs.bare && !inputs.files }}'), quick);
+  assert.match(quick, /--test-reporter=\.\/test\/file-limit\.mjs --test-reporter-destination=stderr \$\(node test\/shard\.mjs quick\)/, quick);
+  const [x, y] = [run('refs/pull/7/merge', 301), run('refs/pull/7/merge', 302)];
+  assert.equal(x.cancel, 'true', 'a new push to a PR cancels the run it replaces');
+  assert.equal(x.group, y.group);
 });

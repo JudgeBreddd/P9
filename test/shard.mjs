@@ -8,6 +8,9 @@ import { readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 
 const ALONE = new Set(['shell-bundle.test.mjs']);
+// C2 (O287): convention tests that need no build and no browser run in CI's `quick` job, first, never in a shard.
+// `node test/shard.mjs quick` prints them. acp-contract is the fixture-version check (an adapter bump with a stale fixture).
+const QUICK = new Set(['inventory.test.mjs', 'agent-literals.test.mjs', 'acp-contract.test.mjs']);
 const [mode, ...list] = process.argv.slice(2);
 // C1 (O286): test/quarantine.json lists flaky tests taken off the blocking path, { file, name, row, since }. `pattern` prints
 // one regex matching exactly their names (empty when there are none), for the quarantine job's --test-name-pattern;
@@ -21,6 +24,10 @@ if (mode === 'pattern' || mode === 'quarantine') {
   console.log(mode === 'pattern' ? (mine.length ? `^(${mine.map((t) => esc(t.name)).join('|')})$` : '') : [...new Set(q.map((t) => t.file))].join(' '));
   process.exit(0);
 }
+if (mode === 'quick') {
+  console.log([...QUICK].sort().map((name) => 'test/' + name).join(' '));
+  process.exit(0);
+}
 if (mode === 'together' || mode === 'alone') {
   const quarantined = new Set(JSON.parse(readFileSync(new URL('quarantine.json', import.meta.url), 'utf8')).map((t) => path.basename(t.file)));
   const alone = (file) => ALONE.has(path.basename(file)) || quarantined.has(path.basename(file));
@@ -31,7 +38,7 @@ const [index, count] = process.argv.slice(2).map(Number);
 if (!(count > 0 && index >= 0 && index < count)) throw new Error('usage: node test/shard.mjs <index> <count>');
 const dir = new URL('./', import.meta.url);
 const timings = JSON.parse(readFileSync(new URL('timings.json', dir), 'utf8'));
-const files = readdirSync(dir).filter((name) => name.endsWith('.test.mjs')).sort()
+const files = readdirSync(dir).filter((name) => name.endsWith('.test.mjs') && !QUICK.has(name)).sort()
   .map((name) => ({ name, seconds: timings[name] ?? 8 })).sort((a, b) => b.seconds - a.seconds);
 const shards = Array.from({ length: count }, () => ({ seconds: 0, names: [] }));
 for (const file of files) {

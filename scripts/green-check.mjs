@@ -77,18 +77,21 @@ async function main() {
   const page = (route, key) => { const r = json(route), list = r[key] ?? [];
     if ((r.total_count ?? 0) > list.length) refuse(`item ${item}: ${route.split('?')[0]} has ${r.total_count} ${key}, more than one page of ${list.length}`);
     return list; };
-  const runs = page(`repos/${repo}/actions/runs?head_sha=${commit}&per_page=100`, 'workflow_runs');
+  // C3 (O288), #574 r2-r4: every run on the commit must be complete and green, from any PR or event, except a run by hand
+  // (workflow_dispatch: named files, bare, evidence), which diagnoses and is not the commit's CI. A cancelled run is not
+  // green: marking a draft ready while its run is still going cancels it, and a re-run (same id, latest attempt) clears it.
+  const runs = page(`repos/${repo}/actions/runs?head_sha=${commit}&per_page=100`, 'workflow_runs').filter((r) => r.event !== 'workflow_dispatch');
   if (!runs.length) refuse(`item ${item}: no CI run on ${commit.slice(0, 8)}`);
   const open = runs.filter((r) => r.status !== 'completed'), red = runs.filter((r) => r.status === 'completed' && r.conclusion !== 'success');
   if (open.length) refuse(`item ${item}: CI on ${commit.slice(0, 8)} is not complete (${open.map((r) => r.name).join(', ')})`);
-  if (red.length) refuse(`item ${item}: CI on ${commit.slice(0, 8)} is not green (${red.map((r) => r.name + ' ' + r.conclusion).join(', ')})`);
+  if (red.length) refuse(`item ${item}: CI on ${commit.slice(0, 8)} is not green (${red.map((r) => r.name + ' ' + r.conclusion).join(', ')})${red.some((r) => r.conclusion === 'cancelled') ? '; re-run it: ' + red.filter((r) => r.conclusion === 'cancelled').map((r) => `gh run rerun ${r.id} -R ${repo}`).join(' and ') : ''}`);
   const seen = [];
   for (const r of runs) for (const j of page(`repos/${repo}/actions/runs/${r.id}/jobs?per_page=100`, 'jobs')) {
     // C1 (O286): the quarantine shard is advisory (it never blocks), so its lines are no evidence either way.
     if (j.conclusion === 'skipped' || / \(quarantine\)$/.test(j.name)) continue;
     const log = gh(`repos/${repo}/actions/jobs/${j.id}/logs`);
     if (!log.trim()) refuse(`item ${item}: the log of CI job "${j.name}" is empty`);
-    seen.push(...results(log));
+    seen.push(...results(log).map((s) => ({ ...s, job: j.id })));
   }
   if (!seen.some((s) => s.ok)) refuse(`item ${item}: the CI logs on ${commit.slice(0, 8)} have no P9_PASS lines (the per-test file evidence test/file-limit.mjs writes)`);
   for (const t of tests) {
@@ -97,7 +100,12 @@ async function main() {
     const hits = seen.filter((s) => s.title.includes(t.title)), ok = hits.filter((s) => s.ok && s.file === t.file), bad = hits.filter((s) => !s.ok);
     if (bad.length) refuse(`item ${item}: ${name} failed in CI (${bad.length} ✖ line${bad.length > 1 ? 's' : ''})`);
     if (!ok.length) refuse(`item ${item}: ${name} has no passed line in CI on ${commit.slice(0, 8)}`);
-    if (ok.length > 1) refuse(`item ${item}: ${name} matches ${ok.length} passed lines; name it so it matches exactly one`);
+    // #574 r4-r5: one name must pick one test: one title across all jobs, and one line per job. The same test in two runs
+    // (a reopened PR) or on two platforms is still one test.
+    const titles = new Set(ok.map((s) => s.title));
+    if (titles.size > 1) refuse(`item ${item}: ${name} matches ${titles.size} passed tests; name it so it matches exactly one`);
+    const most = Math.max(...Object.values(Object.groupBy(ok, (s) => s.job)).map((l) => l.length));
+    if (most > 1) refuse(`item ${item}: ${name} matches ${most} passed lines in one CI job; name it so it matches exactly one`);
   }
   console.log(`green: item ${item}, ${tests.length} named test${tests.length > 1 ? 's' : ''} passed in CI on ${commit.slice(0, 8)}`);
 }

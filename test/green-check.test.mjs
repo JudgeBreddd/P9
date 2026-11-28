@@ -40,13 +40,13 @@ const LOG = [
 
 function run({ plan = PLAN, runs = [{ id: 1, name: 'test', status: 'completed', conclusion: 'success' }],
   jobs = [{ id: 11, name: 'ubuntu', conclusion: 'success' }, { id: 12, name: 'windows', conclusion: 'skipped' }],
-  logs = { 11: LOG }, runsTotal, jobsTotal, fail = null, args, stdin } = {}) {
+  logs = { 11: LOG }, jobsOf = {}, runsTotal, jobsTotal, fail = null, args, stdin } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'green-check-'));
   try {
     writeFileSync(join(dir, 'gh'), FAKE_GH); chmodSync(join(dir, 'gh'), 0o755);
     writeFileSync(join(dir, 'sprint.md'), plan);
     writeFileSync(join(dir, 'runs.json'), JSON.stringify({ total_count: runsTotal ?? runs.length, workflow_runs: runs }));
-    for (const r of runs) writeFileSync(join(dir, `jobs-${r.id}.json`), JSON.stringify({ total_count: jobsTotal ?? jobs.length, jobs }));
+    for (const r of runs) { const j = jobsOf[r.id] ?? jobs; writeFileSync(join(dir, `jobs-${r.id}.json`), JSON.stringify({ total_count: jobsTotal ?? j.length, jobs: j })); }
     for (const [id, text] of Object.entries(logs)) writeFileSync(join(dir, `log-${id}.txt`), text);
     if (fail) writeFileSync(join(dir, 'fail'), fail);
     const argv = args ?? ['--item', 'O7', '--commit', SHA, '--repo', 'o/r', '--plan', join(dir, 'sprint.md')];
@@ -89,7 +89,7 @@ test('green check refuses CI that is missing, pending or red, and a gh that fail
 test('green check refuses a named test that is missing, failed, or matches more than one passed line', () => {
   refused(run({ logs: { 11: LOG.replaceAll('alpha works', 'alpha broke') } }), 'test/a.test.mjs::alpha works has no passed line');
   refused(run({ logs: { 11: LOG + '\n2026-11-20T10:00:01.0000000Z   ✖ alpha works (3ms)' } }), 'test/a.test.mjs::alpha works failed in CI (1 ✖ line)');
-  refused(run({ logs: { 11: LOG + '\n2026-11-20T10:00:01.0000000Z P9_PASS test/b.test.mjs :: beta works again' } }), 'beta works matches 2 passed lines');
+  refused(run({ logs: { 11: LOG + '\n2026-11-20T10:00:01.0000000Z P9_PASS test/b.test.mjs :: beta works again' } }), 'beta works matches 2 passed tests');
 });
 
 test('green check refuses a Tests selector that is not a test file and a title', () => {
@@ -147,4 +147,41 @@ test('green check ignores the advisory quarantine job: its pass is not a second 
   assert.equal(again.status, 0, again.out);
   const red = run({ jobs, logs: { 11: LOG, 13: '2026-11-20T10:00:02.0000000Z   ✖ alpha works (3ms)' } });
   assert.equal(red.status, 0, red.out);
+});
+
+// C3 (O288), #574 r1-r5: every run on the commit must be complete and green, from any PR or event; a cancelled run is not
+// green, and the refusal names the run to re-run. A test passing in two runs counts once; a name matching two different
+// titles, in one job or across jobs, is ambiguous.
+test('green check: any red or cancelled run on the commit refuses, even a different PR\'s; a test in two green runs counts once', () => {
+  const green = { id: 1, name: 'Tests', workflow_id: 7, event: 'pull_request', status: 'completed', conclusion: 'success' };
+  const cancelled = { ...green, id: 2, conclusion: 'cancelled' }, red = { ...green, id: 2, conclusion: 'failure' };
+  const jobsOf = { 1: [{ id: 11, name: 'linux (0)', conclusion: 'success' }], 2: [{ id: 21, name: 'linux (0)', conclusion: 'success' }] };
+  // A cancelled run before or after a green one (a draft made ready mid-run, a cancelled ready run), or another workflow's.
+  refused(run({ runs: [cancelled, green], jobsOf, logs: { 11: LOG, 21: LOG } }), 'is not green (Tests cancelled); re-run it: gh run rerun 2 -R o/r');
+  refused(run({ runs: [green, { ...cancelled, id: 0 }], jobsOf: { ...jobsOf, 0: [] }, logs: { 11: LOG } }), 'is not green (Tests cancelled); re-run it: gh run rerun 0 -R o/r');
+  refused(run({ runs: [green, { ...cancelled, id: 3, name: 'scan', workflow_id: 9 }], jobsOf: { ...jobsOf, 3: [] }, logs: { 11: LOG } }), 'is not green (scan cancelled)');
+  // The same head on two PRs: a green run for the other PR does not hide this PR's red run, in either order.
+  refused(run({ runs: [red, green], jobsOf, logs: { 11: LOG, 21: LOG } }), 'is not green (Tests failure)');
+  refused(run({ runs: [green, { ...red, id: 0 }], jobsOf: { ...jobsOf, 0: [] }, logs: { 11: LOG } }), 'is not green (Tests failure)');
+  // A reopened green PR: two green runs with the same lines are still one passed test each.
+  const twice = run({ runs: [green, { ...green, id: 2 }], jobsOf, logs: { 11: LOG, 21: LOG } });
+  assert.equal(twice.status, 0, twice.out);
+  // But one title passing twice in one job (two tests with the same title in one file) is ambiguous, even beside a clean run.
+  const extra = LOG + '\n2026-11-20T10:00:01.0000000Z P9_PASS test/b.test.mjs :: beta works when idle';
+  refused(run({ runs: [green, { ...green, id: 2 }], jobsOf, logs: { 11: extra, 21: LOG } }), 'beta works matches 2 passed lines in one CI job');
+  // And two different titles in two jobs (one file's Linux and Windows tests) are ambiguous too.
+  const other = LOG.replace('beta works when idle', 'beta works on Windows').replace('beta works when idle', 'beta works on Windows');
+  refused(run({ runs: [green, { ...green, id: 2 }], jobsOf, logs: { 11: LOG, 21: other } }), 'beta works matches 2 passed tests');
+});
+
+// #574 round 2 blocker: a run by hand (workflow_dispatch: named files, bare, evidence) shares the Tests workflow with the PR's
+// run. It diagnoses; it is not the PR's CI, so it neither replaces the PR's run nor adds to it.
+test('green check ignores runs by hand: a green named run after red PR CI refuses, a bare run after green PR CI passes', () => {
+  const pr = { id: 1, name: 'Tests', workflow_id: 7, event: 'pull_request', status: 'completed', conclusion: 'success' };
+  const byHand = { id: 2, name: 'Tests', workflow_id: 7, event: 'workflow_dispatch', status: 'completed', conclusion: 'success' };
+  const jobsOf = { 1: [{ id: 11, name: 'linux (0)', conclusion: 'failure' }], 2: [{ id: 21, name: 'linux (0)', conclusion: 'success' }] };
+  refused(run({ runs: [{ ...pr, conclusion: 'failure' }, byHand], jobsOf, logs: { 11: LOG, 21: LOG } }), 'is not green (Tests failure)');
+  const bare = run({ runs: [pr, byHand], jobsOf: { 1: [{ id: 11, name: 'linux (0)', conclusion: 'success' }], 2: [{ id: 21, name: 'bare (x64)', conclusion: 'success' }] }, logs: { 11: LOG, 21: 'bare install ok' } });
+  assert.equal(bare.status, 0, bare.out);
+  refused(run({ runs: [byHand], jobsOf, logs: { 21: LOG } }), 'no CI run on abcdef12');
 });
