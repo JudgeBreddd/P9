@@ -9,6 +9,9 @@ contextBridge.exposeInMainWorld('p9dev', Object.freeze({
   openInCode: (name, line, reason) => ipcRenderer.invoke('p9dev:open-in-code', { name, line, reason }),
   openFolder: (folder) => folder === undefined ? ipcRenderer.invoke('p9dev:open-folder') : ipcRenderer.invoke('p9dev:open-folder', folder),
   installEditor: () => ipcRenderer.invoke('p9dev:install-editor'),
+  // O294: the page says what it shows ({ tabs, list, rest }); main answers and later says whether the shell shows it files-only.
+  files: (state) => ipcRenderer.invoke('p9dev:files', state),
+  onOnly: (callback) => { ipcRenderer.on('p9dev:only', (_event, only) => callback(only)); },
   onLook: (callback) => { ipcRenderer.on('p9dev:look', (_event, look) => callback(look)); },
   // p9 edit / p9 diff: the page says when it can open files, then main sends each checked request.
   onOpen: (callback) => { ipcRenderer.on('p9dev:open', (_event, request) => callback(request)); return ipcRenderer.invoke('p9dev:open-ready'); },
