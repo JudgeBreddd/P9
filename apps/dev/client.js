@@ -375,10 +375,10 @@ const setEditorClosed = async closed => {
   const moved = explorer && views.getViewContainerLocation(explorer) !== where;
   if (moved) views.moveViewContainerToLocation(explorer, where);
   if (closed) { await v.commands.executeCommand('workbench.view.explorer'); layout.setAuxiliaryBarMaximized(true); }
-  else {
+  else if (moved) { // only what closing did is undone: a secondary bar the user maximized stays so
     layout.setAuxiliaryBarMaximized(false);
     // Opening it shows it in the sidebar again; the file that was opened keeps the keyboard.
-    if (moved) for (const command of ['workbench.action.closeAuxiliaryBar', 'workbench.view.explorer', 'workbench.action.focusActiveEditorGroup']) await v.commands.executeCommand(command);
+    for (const command of ['workbench.action.closeAuxiliaryBar', 'workbench.view.explorer', 'workbench.action.focusActiveEditorGroup']) await v.commands.executeCommand(command);
   }
   await window.p9dev.editorClosed(closed);
 };
