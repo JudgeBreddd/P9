@@ -1011,5 +1011,11 @@ test('O294: no editor tab and the chat beside: the file list and the chat, no ed
   // And the chat turned on with nothing open goes straight to the file list and the chat.
   await shell.click('#sideToggle');
   await until('the chat on, nothing open', g => filesOnly(g) && g.list === start && g.chat > 0);
+  // The panes swapped (the chat on the left): the same two, and the divider still sizes the file list.
+  await shell.click('#side [data-side-swap]');
+  await until('the chat on the left', g => filesOnly(g) && g.list === start && g.chatLeft < g.view.x);
+  await drag(-50);
+  await until('dragged wider, the chat on the left', g => filesOnly(g) && g.list === start + 50 && g.chatLeft < g.view.x);
+  await seen('o294-9-chat-left');
   assert.deepEqual(online(errors), []);
 }));
