@@ -194,13 +194,14 @@ jobs:
           # open row (test/quarantine.json): the shards skip it, this job's quarantine shard runs it and reports. Still never
           # retried. The quarantine shard exits 0; its summary says which tests failed.
           if [ "$SHARD" = quarantine ]; then
-            QPAT=$(node test/shard.mjs pattern); QFILES=$(node test/shard.mjs quarantine)
-            # #573 r1 #4 (O293): each call's exit code and each entry's outcome, so a call that dies before any result shows.
-            touch "$RUNNER_TEMP/tests.log"; timed=0; quarantined='none listed'
+            # #573 r1 #4, #580 r1 (O293): each call's exit code and each entry's outcome, so a call that dies before any result
+            # shows. Each quarantined file runs alone with only its own entries' pattern, so a same-title test elsewhere never runs.
+            touch "$RUNNER_TEMP/tests.log"; timed=0; calls=
             P9_TIMED=1 run test/shell-bundle.test.mjs || timed=$?
-            if [ -n "$QFILES" ]; then quarantined=0; run --test-name-pattern="$QPAT" $QFILES || quarantined=$?; fi
-            { echo '### Quarantined tests (not blocking)'; echo "- shell-bundle timing call: exit $timed"; echo "- quarantined tests call: exit $quarantined"
+            for f in $(node test/shard.mjs quarantine); do c=0; run --test-name-pattern="$(node test/shard.mjs pattern "$f")" "$f" || c=$?; calls="$calls $f exit $c;"; done
+            { echo '### Quarantined tests (not blocking)'; echo "- shell-bundle timing call: exit $timed"; echo "- quarantined test calls:${calls:- none listed}"
               node test/shard.mjs report "$RUNNER_TEMP/tests.log"; grep -E '^\s*(✔|✖) ' "$RUNNER_TEMP/tests.log" | grep -v 'failing tests' || echo 'no result lines'; } >> "$GITHUB_STEP_SUMMARY"
+            touch "$RUNNER_TEMP/quarantine-reported"
             grep -E '^\s*(✔|✖) ' "$RUNNER_TEMP/tests.log" || true
             exit 0
           fi
@@ -218,6 +219,11 @@ jobs:
             run "${SKIP[@]}" $FILES || rc=$?
           done
           exit $rc
+      # #580 r1 (O293): a setup step that failed (install, build) skips the Tests step and its summary; say so.
+      - name: Quarantine summary
+        if: ${{ always() && matrix.shard == 'quarantine' }}
+        run: |
+          [ -f "$RUNNER_TEMP/quarantine-reported" ] || printf '### Quarantined tests (not blocking)\n- not run: a step before Tests failed (see the job log)\n' >> "$GITHUB_STEP_SUMMARY"
       # The output the result rests on, kept on every run (a failure too), not only in the job log.
       - name: Test output
         if: always()

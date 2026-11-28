@@ -24,13 +24,14 @@ if (mode === 'pattern' || mode === 'quarantine') {
   console.log(mode === 'pattern' ? (mine.length ? `^(${mine.map((t) => esc(t.name)).join('|')})$` : '') : [...new Set(q.map((t) => t.file))].join(' '));
   process.exit(0);
 }
-// #573 r1 #4-#5 (O293): `report <log>` prints each entry's outcome in the quarantine job's log: passed (its P9_PASS line,
-// which names the file), failed (a ✖ line with its name), or no result, which is an entry whose test no longer runs.
+// #573 r1 #4-#5, #580 r1 (O293): `report <log>` prints each entry's outcome in the quarantine job's log, by exact file and
+// title from test/file-limit.mjs's lines: passed (`P9_PASS <file> :: <title>`), failed (`✖ failed now: <title> (<file>:<line>)`),
+// or no result, which is an entry whose test no longer runs. spec's ✖ lines carry no file, so they are not read.
 if (mode === 'report') {
-  const q = JSON.parse(readFileSync(new URL('quarantine.json', import.meta.url), 'utf8')), log = readFileSync(list[0], 'utf8').split('\n');
+  const q = JSON.parse(readFileSync(new URL('quarantine.json', import.meta.url), 'utf8')), log = readFileSync(list[0], 'utf8').split('\n').map((l) => l.replace(/^\S+Z /, '').trimEnd());
   for (const t of q) {
-    const outcome = log.some((l) => l.includes(`P9_PASS ${t.file} :: ${t.name}`)) ? 'passed'
-      : log.some((l) => /^\s*✖ /.test(l.replace(/^\S+Z /, '')) && l.includes('✖ ' + t.name)) ? 'failed' : 'no result (the test did not run: fix the entry)';
+    const outcome = log.includes(`P9_PASS ${t.file} :: ${t.name}`) ? 'passed'
+      : log.some((l) => l.startsWith(`✖ failed now: ${t.name} (${t.file}:`)) ? 'failed' : 'no result (the test did not run: fix the entry)';
     console.log(`- ${outcome}: ${t.name} (${t.file}, ${t.row})`);
   }
   process.exit(0);

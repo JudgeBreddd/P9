@@ -19,7 +19,6 @@ const dir = process.env.FAKE_GH, route = process.argv.at(-1) || '';
 if (fs.existsSync(path.join(dir, 'fail'))) { process.stderr.write(fs.readFileSync(path.join(dir, 'fail'), 'utf8')); process.exit(1); }
 let m, name;
 if (/actions\\/runs\\?head_sha=/.test(route)) name = 'runs.json';
-else if (/commits\\/[0-9a-f]+\\/pulls/.test(route)) name = 'pulls.json';
 else if ((m = /actions\\/runs\\/(\\d+)\\/jobs/.exec(route))) name = 'jobs-' + m[1] + '.json';
 else if ((m = /actions\\/jobs\\/(\\d+)\\/logs/.exec(route))) name = 'log-' + m[1] + '.txt';
 const f = name && path.join(dir, name);
@@ -41,12 +40,11 @@ const LOG = [
 
 function run({ plan = PLAN, runs = [{ id: 1, name: 'test', status: 'completed', conclusion: 'success' }],
   jobs = [{ id: 11, name: 'ubuntu', conclusion: 'success' }, { id: 12, name: 'windows', conclusion: 'skipped' }],
-  logs = { 11: LOG }, jobsOf = {}, runsTotal, jobsTotal, fail = null, args, stdin, pulls = [{ number: 5, state: 'open', draft: false }] } = {}) {
+  logs = { 11: LOG }, jobsOf = {}, runsTotal, jobsTotal, fail = null, args, stdin } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'green-check-'));
   try {
     writeFileSync(join(dir, 'gh'), FAKE_GH); chmodSync(join(dir, 'gh'), 0o755);
     writeFileSync(join(dir, 'sprint.md'), plan);
-    writeFileSync(join(dir, 'pulls.json'), JSON.stringify(pulls));
     writeFileSync(join(dir, 'runs.json'), JSON.stringify({ total_count: runsTotal ?? runs.length, workflow_runs: runs }));
     for (const r of runs) { const j = jobsOf[r.id] ?? jobs; writeFileSync(join(dir, `jobs-${r.id}.json`), JSON.stringify({ total_count: jobsTotal ?? j.length, jobs: j })); }
     for (const [id, text] of Object.entries(logs)) writeFileSync(join(dir, `log-${id}.txt`), text);
@@ -83,7 +81,7 @@ test('green check refuses CI that is missing, pending or red, and a gh that fail
   refused(run({ runs: [] }), 'no CI run on abcdef12');
   refused(run({ runs: [{ id: 1, name: 'test', status: 'in_progress', conclusion: null }] }), 'is not complete (test)');
   refused(run({ runs: [{ id: 1, name: 'test', status: 'completed', conclusion: 'failure' }] }), 'is not green (test failure)');
-  refused(run({ fail: 'gh: Server Error (HTTP 500)\n' }), 'gh api repos/o/r/commits/' + SHA + '/pulls failed (gh: Server Error (HTTP 500))');
+  refused(run({ fail: 'gh: Server Error (HTTP 500)\n' }), 'gh api repos/o/r/actions/runs failed (gh: Server Error (HTTP 500))');
   refused(run({ logs: {} }), 'gh api repos/o/r/actions/jobs/11/logs failed');
   refused(run({ logs: { 11: '\n' } }), 'the log of CI job "ubuntu" is empty');
 });
@@ -188,10 +186,33 @@ test('green check ignores runs by hand: a green named run after red PR CI refuse
   refused(run({ runs: [byHand], jobsOf, logs: { 21: LOG } }), 'no CI run on abcdef12');
 });
 
-// #574 pipeline re-read #2 (O293): a draft's run is green with every shard skipped, so it is no evidence for a merge.
-test('green check refuses a commit whose open PR is a draft; a closed draft or no PR at all does not', () => {
-  refused(run({ pulls: [{ number: 5, state: 'open', draft: true }] }), 'PR #5 on abcdef12 is a draft, so its CI ran quick only');
-  for (const pulls of [[], [{ number: 4, state: 'closed', draft: true }, { number: 5, state: 'open', draft: false }]]) {
-    const r = run({ pulls }); assert.equal(r.status, 0, r.out);
-  }
+// #574 pipeline re-read #2, #580 r1 (O293): quick's log says whether the heavy jobs were due. A run that skipped them while
+// due (a draft's, or one read before marking it ready started the full run) is no evidence; another run on the commit that
+// passed them is. A Markdown-only change (heavy false) skips them and passes.
+test('green check refuses a commit whose only run skipped heavy jobs that were due; a full run or a Markdown-only change passes', () => {
+  const base = { name: 'Tests', event: 'pull_request', status: 'completed', conclusion: 'success' };
+  const quick = (id, heavy) => ({ id, name: 'quick', conclusion: 'success', log: `2026-11-20T10:00:00.0000000Z heavy jobs: ${heavy}\n` + LOG });
+  const shaped = (list) => ({ jobs: list.map(({ log, ...j }) => j), logs: Object.fromEntries(list.filter((j) => j.log).map((j) => [j.id, j.log])) });
+  const draft = shaped([quick(11, true), { id: 12, name: 'linux (0)', conclusion: 'skipped' }, { id: 13, name: 'windows (x64)', conclusion: 'skipped' }]);
+  refused(run({ runs: [{ ...base, id: 1 }], jobsOf: { 1: draft.jobs }, logs: draft.logs }), 'the heavy jobs were due on abcdef12 and no run passed them');
+  const full = shaped([quick(21, true), { id: 22, name: 'linux (0)', conclusion: 'success', log: LOG }, { id: 23, name: 'windows (x64)', conclusion: 'success', log: LOG }]);
+  const both = run({ runs: [{ ...base, id: 1 }, { ...base, id: 2 }], jobsOf: { 1: draft.jobs, 2: full.jobs }, logs: { ...draft.logs, ...full.logs } });
+  assert.equal(both.status, 0, both.out);
+  const md = shaped([quick(11, false), { id: 12, name: 'linux (0)', conclusion: 'skipped' }]);
+  const markdown = run({ runs: [{ ...base, id: 1 }], jobsOf: { 1: md.jobs }, logs: md.logs });
+  assert.equal(markdown.status, 0, markdown.out);
+  refused(run({ runs: [{ ...base, id: 1 }], jobsOf: { 1: [{ id: 11, name: 'quick', conclusion: 'success' }] }, logs: { 11: LOG } }), "quick's log on abcdef12 does not say whether the heavy jobs were due");
+});
+
+// #580 r1 (O293): the quarantine job never blocks, so a run still going only for it is complete once `tests` and every
+// other job finished; still going for any other job, or before `tests` finished, it is not.
+test('green check: a run still going only for its quarantine job passes; one still going for another job does not', () => {
+  const going = { id: 1, name: 'Tests', event: 'pull_request', status: 'in_progress', conclusion: null };
+  const jobs = [{ id: 11, name: 'linux (0)', status: 'completed', conclusion: 'success' }, { id: 12, name: 'tests', status: 'completed', conclusion: 'success' },
+    { id: 13, name: 'linux (quarantine)', status: 'in_progress', conclusion: null }];
+  const ok = run({ runs: [going], jobs, logs: { 11: LOG, 12: 'tests ok' } });
+  assert.equal(ok.status, 0, ok.out);
+  refused(run({ runs: [going], jobs: jobs.map((j) => j.id === 11 ? { ...j, status: 'in_progress', conclusion: null } : j), logs: { 12: 'tests ok' } }), 'is not complete (Tests)');
+  refused(run({ runs: [going], jobs: jobs.filter((j) => j.id !== 12), logs: { 11: LOG } }), 'is not complete (Tests)');
+  refused(run({ runs: [going], jobs: jobs.map((j) => j.id === 11 ? { ...j, conclusion: 'failure' } : j), logs: { 11: LOG, 12: 'tests ok' } }), 'is not green (Tests failed job)');
 });

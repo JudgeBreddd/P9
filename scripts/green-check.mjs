@@ -80,23 +80,34 @@ async function main() {
   // C3 (O288), #574 r2-r4: every run on the commit must be complete and green, from any PR or event, except a run by hand
   // (workflow_dispatch: named files, bare, evidence), which diagnoses and is not the commit's CI. A cancelled run is not
   // green: marking a draft ready while its run is still going cancels it, and a re-run (same id, latest attempt) clears it.
-  // #574 pipeline re-read #2 (O293): a draft runs quick only, so its green run skipped every shard. An open draft PR on
-  // the commit refuses; marking it ready starts the full run, which this then waits for.
-  const drafts = json(`repos/${repo}/commits/${commit}/pulls?per_page=100`).filter((p) => p.state === 'open' && p.draft);
-  if (drafts.length) refuse(`item ${item}: PR #${drafts.map((p) => p.number).join(', #')} on ${commit.slice(0, 8)} is a draft, so its CI ran quick only; mark it ready (gh pr ready) and wait for the full run`);
+  // C1 (O286): the quarantine job is advisory (it never blocks), so its lines are no evidence either way. #580 r1 (O293):
+  // a run still going only for it is complete here once its `tests` job and every other job have finished.
+  const advisory = (j) => / \(quarantine\)$/.test(j.name);
   const runs = page(`repos/${repo}/actions/runs?head_sha=${commit}&per_page=100`, 'workflow_runs').filter((r) => r.event !== 'workflow_dispatch');
   if (!runs.length) refuse(`item ${item}: no CI run on ${commit.slice(0, 8)}`);
-  const open = runs.filter((r) => r.status !== 'completed'), red = runs.filter((r) => r.status === 'completed' && r.conclusion !== 'success');
+  const jobsOf = new Map(runs.map((r) => [r.id, page(`repos/${repo}/actions/runs/${r.id}/jobs?per_page=100`, 'jobs')]));
+  const blocking = (r) => jobsOf.get(r.id).filter((j) => !advisory(j));
+  const finished = (r) => r.status === 'completed' || (jobsOf.get(r.id).some((j) => j.name === 'tests' && j.status === 'completed') && blocking(r).every((j) => j.status === 'completed'));
+  const green = (r) => r.status === 'completed' ? r.conclusion === 'success' : blocking(r).every((j) => ['success', 'skipped'].includes(j.conclusion));
+  const open = runs.filter((r) => !finished(r)), red = runs.filter((r) => finished(r) && !green(r));
   if (open.length) refuse(`item ${item}: CI on ${commit.slice(0, 8)} is not complete (${open.map((r) => r.name).join(', ')})`);
-  if (red.length) refuse(`item ${item}: CI on ${commit.slice(0, 8)} is not green (${red.map((r) => r.name + ' ' + r.conclusion).join(', ')})${red.some((r) => r.conclusion === 'cancelled') ? '; re-run it: ' + red.filter((r) => r.conclusion === 'cancelled').map((r) => `gh run rerun ${r.id} -R ${repo}`).join(' and ') : ''}`);
-  const seen = [];
-  for (const r of runs) for (const j of page(`repos/${repo}/actions/runs/${r.id}/jobs?per_page=100`, 'jobs')) {
-    // C1 (O286): the quarantine shard is advisory (it never blocks), so its lines are no evidence either way.
-    if (j.conclusion === 'skipped' || / \(quarantine\)$/.test(j.name)) continue;
+  if (red.length) refuse(`item ${item}: CI on ${commit.slice(0, 8)} is not green (${red.map((r) => r.name + ' ' + (r.conclusion ?? 'failed job')).join(', ')})${red.some((r) => r.conclusion === 'cancelled') ? '; re-run it: ' + red.filter((r) => r.conclusion === 'cancelled').map((r) => `gh run rerun ${r.id} -R ${repo}`).join(' and ') : ''}`);
+  const seen = [], due = [];
+  for (const r of runs) for (const j of blocking(r)) {
+    if (j.conclusion === 'skipped') continue;
     const log = gh(`repos/${repo}/actions/jobs/${j.id}/logs`);
     if (!log.trim()) refuse(`item ${item}: the log of CI job "${j.name}" is empty`);
     seen.push(...results(log).map((s) => ({ ...s, job: j.id })));
+    // #574 pipeline re-read #2, #580 r1 (O293): quick says whether the heavy jobs were due. A draft's run (or one read
+    // before marking it ready started the full run) skipped them while due, so it is no evidence for them.
+    if (j.name === 'quick') {
+      const heavy = /heavy jobs: (true|false)/.exec(log)?.[1];
+      if (!heavy) refuse(`item ${item}: quick's log on ${commit.slice(0, 8)} does not say whether the heavy jobs were due`);
+      if (heavy === 'true') due.push(r);
+    }
   }
+  const heavyRan = (r) => { const heavy = blocking(r).filter((j) => /^(linux|windows) \(/.test(j.name)); return heavy.length && heavy.every((j) => j.conclusion === 'success'); };
+  if (due.length && !due.some(heavyRan)) refuse(`item ${item}: the heavy jobs were due on ${commit.slice(0, 8)} and no run passed them (a draft's run skips them); mark the PR ready (gh pr ready) and wait for the full run`);
   if (!seen.some((s) => s.ok)) refuse(`item ${item}: the CI logs on ${commit.slice(0, 8)} have no P9_PASS lines (the per-test file evidence test/file-limit.mjs writes)`);
   for (const t of tests) {
     const name = t.file + '::' + t.title;
