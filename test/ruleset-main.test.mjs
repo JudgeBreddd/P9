@@ -36,6 +36,8 @@ test('main: no deletion, no force push, changes only through a squash-merged PR,
 test('each required check from Actions is a job that reports on every pull request', () => {
   const actions = rule('required_status_checks').parameters.required_status_checks.filter((c) => c.integration_id === 15368);
   assert.deepEqual(actions.map((c) => c.context), ['tests'], 'one Actions check: tests (a skipped matrix job loses its shard names)');
+  // #577 r1 #2: test.yaml comes from the PR, so the reviewer's pass on the exact head (R5's commit status) is required too.
+  assert.ok(rule('required_status_checks').parameters.required_status_checks.some((c) => c.context === 'review' && !c.integration_id));
   assert.equal(field('tests', 'if'), '${{ always() }}', 'tests runs even when the jobs it waits for fail or skip');
   const name = field('tests', 'name').replace(/^\$\{\{(.*)\}\}$/, '$1').replace(/==/g, '===');
   const named = (event) => new Function('github', `return (${name});`)({ event_name: event });
@@ -50,13 +52,21 @@ test("tests passes only when quick passed and each heavy job passed or was skipp
   const at = jobs.tests.findIndex((l) => l.trim() === 'run: |');
   const body = [];
   for (const l of jobs.tests.slice(at + 1)) { if (l.trim() && !l.startsWith(' '.repeat(10))) break; body.push(l.slice(10)); }
-  const passes = (QUICK, LINUX, WINDOWS) => {
-    try { execFileSync('bash', ['-c', body.join('\n')], { env: { PATH: process.env.PATH, QUICK, LINUX, WINDOWS }, stdio: 'pipe' }); return true; } catch { return false; }
+  const passes = (QUICK, LINUX, WINDOWS, { EVENT = 'pull_request', HEAVY = QUICK === 'success' ? 'true' : '', DRAFT = 'false' } = {}) => {
+    const env = { PATH: process.env.PATH, EVENT, QUICK, HEAVY, DRAFT, LINUX, WINDOWS };
+    try { execFileSync('bash', ['-c', body.join('\n')], { env, stdio: 'pipe' }); return true; } catch { return false; }
   };
   assert.equal(passes('success', 'success', 'success'), true);
-  assert.equal(passes('success', 'skipped', 'skipped'), true, 'a Markdown-only or draft PR');
+  assert.equal(passes('success', 'skipped', 'skipped', { HEAVY: 'false' }), true, 'a Markdown-only PR');
+  assert.equal(passes('success', 'skipped', 'skipped', { DRAFT: 'true' }), true, 'a draft');
+  assert.equal(passes('success', 'success', 'success', { EVENT: 'push', DRAFT: '' }), true, 'a merge to main');
+  // #577 r1 #4: a ready code PR whose heavy jobs were skipped (a broken condition) does not pass.
+  assert.equal(passes('success', 'skipped', 'skipped'), false, 'heavy jobs due but skipped');
+  assert.equal(passes('success', 'skipped', 'success'), false);
   assert.equal(passes('success', 'failure', 'success'), false);
   assert.equal(passes('success', 'success', 'cancelled'), false);
   assert.equal(passes('failure', 'skipped', 'skipped'), false);
   assert.equal(passes('skipped', 'skipped', 'skipped'), false, 'quick must have run');
+  // #577 r1 #1: a run by hand skips quick on purpose; its tests (by hand) job passes (the jobs it ran are its result).
+  for (const linux of ['success', 'skipped']) assert.equal(passes('skipped', linux, 'skipped', { EVENT: 'workflow_dispatch' }), true, 'a run by hand');
 });
