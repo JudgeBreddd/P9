@@ -1386,8 +1386,9 @@ export async function createDesktop({ state, open } = {}) {
     const z = window.webContents.getZoomFactor(), px = value => Math.round(value * z);
     // O294: only = the shell shows the view files-only (no editor tab open, a panel beside it). The editor page is told the
     // width the view gets then (false when not), before the view is sized: it gives its file list the editor area's width
-    // only while its own width is that one, so a resize and this message may arrive in either order (#581 r1).
-    const only = b.only ? px(b.width) : false;
+    // only while its own width is that one, so a resize and this message may arrive in either order (#581 r1). The width is
+    // in the editor page's own CSS pixels (the window's pixels over the page's zoom), which is what the page measures (#581 r2).
+    const only = b.only ? Math.round(px(b.width) / devView.webContents.getZoomFactor()) : false;
     if (only !== outer.devOnly) { outer.devOnly = only; devView.webContents.send('p9dev:only', only); }
     devView.setBounds({ x: px(b.x), y: px(b.y), width: px(b.width), height: px(b.height) });
     devView.setVisible(true);

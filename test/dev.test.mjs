@@ -928,6 +928,7 @@ test('O294: no editor tab and the chat beside: the file list and the chat, no ed
   const editor = await editorFor();
   if (!editor) return t.skip('needs the editor server (P9_EDITOR_HOST, or the fixtures reh.tar.gz)');
   let { instance, home, app, shell, dev, errors } = await openDevFocus(t, editor, {});
+  const failures = [errors]; // of every app this test starts
   await writeFile(path.join(instance.workspace, 'note.txt'), 'note\n');
   // What shows: the editor page's parts (0 when hidden), the view's place in the window (main), the shell's panel and tab.
   const read = async () => ({
@@ -942,7 +943,7 @@ test('O294: no editor tab and the chat beside: the file list and the chat, no ed
   // What the owner sees: the editor view drawn into the shell's picture where main places it.
   const seen = async name => {
     const { view } = await read(), src = (await dev.screenshot({ type: 'jpeg', quality: 80 })).toString('base64');
-    await shell.evaluate(({ at, src }) => { const img = Object.assign(document.createElement('img'), { id: 'o294paste', src: 'data:image/jpeg;base64,' + src }); Object.assign(img.style, { position: 'fixed', left: at.x + 'px', top: at.y + 'px', width: at.width + 'px', height: at.height + 'px', zIndex: 99999 }); document.body.append(img); return img.decode(); }, { at: view, src });
+    await shell.evaluate(({ at, src }) => { const img = Object.assign(document.createElement('img'), { id: 'o294paste', src: 'data:image/jpeg;base64,' + src }); Object.assign(img.style, { position: 'fixed', left: at.x / devicePixelRatio + 'px', top: at.y / devicePixelRatio + 'px', width: at.width / devicePixelRatio + 'px', height: at.height / devicePixelRatio + 'px', zIndex: 99999 }); document.body.append(img); return img.decode(); }, { at: view, src });
     // Saved, not printed like shot(): eight whole-window pictures in the log pushed this test's own result off its end.
     if (evidence) { await mkdir(evidence, { recursive: true }); await writeFile(path.join(evidence, name + '.jpg'), await shell.screenshot({ type: 'jpeg', quality: 80 })); }
     await shell.evaluate(() => document.querySelector('#o294paste').remove());
@@ -1034,6 +1035,23 @@ test('O294: no editor tab and the chat beside: the file list and the chat, no ed
   await until('the chat off from the file list', g => g.tabs === 0 && g.chat === 0 && whole(g) && g.list === wide);
   await shell.click('#sideToggle');
   await until('the chat on again', g => filesOnly(g) && g.list === wide && g.chat > 0);
+  // Zoomed in (what Settings does to the shell and the editor page): the view's width in the window's pixels is no longer the
+  // page's own width, and the file list still takes what the divider gives it (#581 r2). The keys move the divider 24 a press.
+  const zoom = z => app.evaluate(({ webContents }, z) => { for (const w of webContents.getAllWebContents()) if (/^p9:\/\/(app|dev)\//.test(w.getURL())) w.setZoomFactor(z); }, z);
+  const near = g => g.tabs === 0 && g.editor === 0 && g.list > 0 && g.tab === 'Files' && Math.abs(g.page - g.strip - g.list) <= 2 && g.chat > 0;
+  for (const z of [1.25, 0.9]) {
+    await zoom(z);
+    got = await until('zoom ' + z, g => near(g) && Math.abs(g.view.width - g.page * z) <= 3);
+    await shell.locator('#side .handle-v').focus();
+    await shell.keyboard.press('ArrowRight'); await shell.keyboard.press('ArrowRight');
+    const before = got.list;
+    await until('zoom ' + z + ', the divider moved 48', g => near(g) && Math.abs(g.list - before - 48) <= 3 && Math.abs(g.view.width - g.page * z) <= 3);
+    if (z > 1) await seen('o294-11-zoomed');
+    await shell.keyboard.press('ArrowLeft'); await shell.keyboard.press('ArrowLeft');
+    await until('zoom ' + z + ', the divider back', g => near(g) && Math.abs(g.list - before) <= 3);
+  }
+  await zoom(1);
+  await until('zoom 1 again', g => filesOnly(g) && g.chat > 0);
   // A crashed editor page with the chat beside it stays down until the view is next placed; it is not rebuilt at once. Twice.
   const pages = () => app.evaluate(({ webContents }) => ({ gone: globalThis.o294gone ?? null, ids: webContents.getAllWebContents().filter(w => w.getURL().startsWith('p9://dev/')).map(w => w.id) }));
   for (const round of [1, 2]) {
@@ -1054,11 +1072,12 @@ test('O294: no editor tab and the chat beside: the file list and the chat, no ed
   await until('a file before the restart', g => g.tabs === 1 && g.chat > 0 && whole(g));
   for (const round of [1, 2]) {
     await app.close();
-    ({ app, shell, dev } = await openDevFocus(t, editor, {}, [], { instance, home }));
-    got = await until('after restart ' + round, g => g.chat > 0 && (g.tabs ? whole(g) : filesOnly(g)));
-    if (round === 1) { await closeAll(); await until('no tab before restart 2', g => filesOnly(g) && g.chat > 0); }
-    else assert.ok(filesOnly(got), 'a fresh editor with no tab and the chat on starts as the file list and the chat');
+    ({ app, shell, dev, errors } = await openDevFocus(t, editor, {}, [], { instance, home }));
+    failures.push(errors);
+    // The first comes back with its tab (the editor and the chat), the second with none (the file list and the chat).
+    if (round === 1) { await until('after restart 1, the tab back', g => g.tabs === 1 && g.chat > 0 && whole(g)); await closeAll(); await until('no tab before restart 2', g => filesOnly(g) && g.chat > 0); }
+    else await until('after restart 2, no tab', g => filesOnly(g) && g.chat > 0);
   }
   await seen('o294-10-restarted');
-  assert.deepEqual(online(errors), []);
+  assert.deepEqual(online(failures.flat()), []);
 }));

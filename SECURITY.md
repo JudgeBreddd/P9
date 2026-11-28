@@ -443,7 +443,7 @@ editor host's loopback port. Its preload exposes p9dev.config(), p9dev.save(path
 content), p9dev.create(path, content), p9dev.hostPath(path, kind), p9dev.openInCode(name, line, reason) and, since v0.1.5,
 p9dev.openFolder() (no arguments) and p9dev.files(state) (three whole numbers about the page's own layout, each checked and
 rebuilt before the shell gets them; the shell only sizes the view from them); p9dev.onOnly(callback) receives only false or
-the view's width as a whole number, never the event object; the main process accepts the calls only
+the view's width (in the page's own pixels) as a whole number, never the event object; the main process accepts the calls only
 from that view's main frame on that exact page, and refuses them from the shell.
 
 Open Folder (since v0.1.5, threat model row 41): Dev Focus can open a folder outside your workspace only from the
