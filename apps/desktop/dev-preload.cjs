@@ -9,6 +9,9 @@ contextBridge.exposeInMainWorld('p9dev', Object.freeze({
   openInCode: (name, line, reason) => ipcRenderer.invoke('p9dev:open-in-code', { name, line, reason }),
   openFolder: (folder) => folder === undefined ? ipcRenderer.invoke('p9dev:open-folder') : ipcRenderer.invoke('p9dev:open-folder', folder),
   installEditor: () => ipcRenderer.invoke('p9dev:install-editor'),
+  // O294: the editor area closed or open. The page says what it shows; the shell's button asks it through main.
+  editorClosed: (closed) => ipcRenderer.invoke('p9dev:editor-closed', closed),
+  onEditor: (callback) => { ipcRenderer.on('p9dev:editor', (_event, closed) => callback(closed)); },
   onLook: (callback) => { ipcRenderer.on('p9dev:look', (_event, look) => callback(look)); },
   // p9 edit / p9 diff: the page says when it can open files, then main sends each checked request.
   onOpen: (callback) => { ipcRenderer.on('p9dev:open', (_event, request) => callback(request)); return ipcRenderer.invoke('p9dev:open-ready'); },

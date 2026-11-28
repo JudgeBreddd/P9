@@ -17,6 +17,8 @@ contextBridge.exposeInMainWorld('p9', Object.freeze({
   lifecycle: (action, payload) => ipcRenderer.invoke('p9:lifecycle', action, payload),
   devView: (bounds) => ipcRenderer.invoke('p9:dev-view', bounds),
   devStill: () => ipcRenderer.invoke('p9:dev-still'),
+  devEditor: (closed) => ipcRenderer.invoke('p9:dev-editor', closed),
+  onDevEditor: (callback) => { ipcRenderer.on('p9:dev-editor-state', (_event, closed) => callback(closed)); },
   cards: (cards) => ipcRenderer.invoke('p9:cards', cards),
   onCardAct: (callback) => { ipcRenderer.on('p9:card-act', (_event, act) => callback(act)); },
   look: (look) => ipcRenderer.invoke('p9:look', look),

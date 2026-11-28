@@ -1,7 +1,7 @@
 // Dev Focus: Monaco + VS Code services (the phase-2 editor, docs/spike-decision.md) against the desktop's loopback editor host.
 // Every write P9's editor makes inside the workspace goes through window.p9dev.save, which the desktop sends to the daemon's
 // guarded save (packages/files). Writes extensions, terminals or language servers make on the host are "runs as you, not guarded".
-import { initialize, getService, IFileService, IThemeService, IExtensionService, ITextFileService, IFileDialogService, IStorageService } from '@codingame/monaco-vscode-api';
+import { initialize, getService, IFileService, IThemeService, IExtensionService, ITextFileService, IFileDialogService, IStorageService, IViewDescriptorService, IWorkbenchLayoutService } from '@codingame/monaco-vscode-api';
 import getWorkbench from '@codingame/monaco-vscode-workbench-service-override';
 import { folderError } from '../desktop/dev-folder.mjs';
 import getModel from '@codingame/monaco-vscode-model-service-override';
@@ -340,7 +340,7 @@ let looking = Promise.resolve();
 window.p9dev.onLook(look => { looking = looking.then(() => followLook(look)).catch(error => console.error('p9: editor look failed:', error.message)); });
 await (await getService(IExtensionService)).whenInstalledExtensionsRegistered();
 // Hooks for the Electron tests (test/dev.test.mjs); the page's own code already holds this API.
-window.devFocus = { v, root, open: async name => v.window.showTextDocument(await v.workspace.openTextDocument(v.Uri.joinPath(v.Uri.parse(guardRoot.toString()), name)), { preview: false }) };
+window.devFocus = { v, root, layout, open: async name => v.window.showTextDocument(await v.workspace.openTextDocument(v.Uri.joinPath(v.Uri.parse(guardRoot.toString()), name)), { preview: false }) };
 // p9 edit / p9 diff (threat model row 14): main sends only checked workspace-relative names, once this page can open them.
 const fileUri = name => v.Uri.joinPath(v.Uri.parse(guardRoot.toString()), name);
 window.p9dev.onOpen(async request => {
@@ -360,4 +360,29 @@ let saving = null;
 const saveSoon = () => { clearTimeout(saving); saving = setTimeout(() => storage.flush().catch(error => console.error('p9: the editor place was not saved:', error.message)), 100); };
 v.window.tabGroups.onDidChangeTabs(saveSoon);
 v.window.tabGroups.onDidChangeTabGroups(saveSoon);
+// O294: the editor area can be closed, leaving the file list and the chat. The workbench's own hide-editor switch always opens
+// the panel in its place, so the Explorer moves into the secondary side bar and that bar is maximized: the file list alone.
+// Opening a file un-maximizes it (the workbench does that itself), which puts the Explorer back on the left. The choice is saved
+// here and applied at every start, and the shell hears what is shown (p9dev.editorClosed). A moved Explorer is put back at
+// start too, so a crash while closed never leaves it on the right.
+const views = await getService(IViewDescriptorService), layout = await getService(IWorkbenchLayoutService);
+const SIDEBAR = 0, AUX = 2; // ViewContainerLocation
+let editorClosed = false;
+const setEditorClosed = async closed => {
+  editorClosed = closed;
+  try { localStorage.setItem('p9-editor-closed', closed ? '1' : '0'); } catch {}
+  const explorer = views.getViewContainerById('workbench.view.explorer'), where = closed ? AUX : SIDEBAR;
+  const moved = explorer && views.getViewContainerLocation(explorer) !== where;
+  if (moved) views.moveViewContainerToLocation(explorer, where);
+  if (closed) { await v.commands.executeCommand('workbench.view.explorer'); layout.setAuxiliaryBarMaximized(true); }
+  else {
+    layout.setAuxiliaryBarMaximized(false);
+    // Opening it shows it in the sidebar again; the file that was opened keeps the keyboard.
+    if (moved) for (const command of ['workbench.action.closeAuxiliaryBar', 'workbench.view.explorer', 'workbench.action.focusActiveEditorGroup']) await v.commands.executeCommand(command);
+  }
+  await window.p9dev.editorClosed(closed);
+};
+layout.onDidChangeAuxiliaryBarMaximized(() => { if (editorClosed && !layout.isAuxiliaryBarMaximized()) setEditorClosed(false).catch(error => console.error('p9: the editor area did not open:', error.message)); });
+window.p9dev.onEditor(closed => setEditorClosed(closed).catch(error => console.error('p9: the editor area did not change:', error.message)));
+await setEditorClosed((() => { try { return localStorage.getItem('p9-editor-closed') === '1'; } catch { return false; } })());
 window.devFocusReady = true;

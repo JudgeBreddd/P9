@@ -292,6 +292,18 @@ function setSideChat(on) { localStorage.setItem('eh-dan-chat:dev', on ? 'on' : '
 side.onResize(() => { const on = side.current()?.slot === 'dan-chat'; $('#sideToggle').setAttribute('aria-pressed', String(on)); placeDev(); });
 $('#sideToggle').onclick = () => setSideChat(side.current()?.slot !== 'dan-chat');
 side.tab($('#devTab .stab'), 'main');
+// O294: the editor area's close button. The editor page does it, saves it and says what it shows (also at every start); only
+// that moves this layout: the view narrows to the file list and the side panel (the chat, opened if nothing shows) takes the rest.
+const devClose = $('#devClose'), stage = $('.stage');
+devClose.hidden = !window.p9?.devEditor;
+devClose.onclick = () => window.p9.devEditor(!stage.dataset.devClosed);
+window.p9?.onDevEditor?.(closed => {
+  if (closed) stage.dataset.devClosed = '1'; else delete stage.dataset.devClosed;
+  $('#devTab .stab').textContent = closed ? 'Files' : 'Editor';
+  devClose.textContent = closed ? '⤢' : '×'; devClose.title = closed ? 'Open the editor area' : 'Close the editor area'; devClose.ariaLabel = devClose.title;
+  if (closed && !side.current()) setSideChat(true);
+  placeDev();
+});
 if (sampleView) window.__side = side; // ponytail: the UI test's door to the panel (sample data is handed in only by tests, never in a packaged build)
 // Item 19 (threat model row 65): an artifact (artifact.mjs) in the side panel's 'artifact' slot, in the mode the agent
 // picked; its chip in the chat reopens it. Answer 2 in specs/side-panel.md: in Dev Focus with the chat beside the

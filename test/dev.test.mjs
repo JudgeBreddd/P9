@@ -919,3 +919,71 @@ test('O268: the editor terminal uses the page renderer at its font size when Web
   await shot(dev, 'o268-terminal');
   assert.deepEqual(online(errors), []);
 }));
+
+// O294: the editor area's close button leaves the file list on the left and the chat in the rest; the choice survives a
+// restart; opening a file brings the editor back (and the Explorer back to the sidebar, the file keeping the keyboard).
+test('O294: Dev Focus closes the editor area to the file list and the chat; still closed after a restart; opening a file brings it back', { skip: process.platform !== 'linux', timeout: 360000 }, logged(async t => {
+  const editor = await editorFor();
+  if (!editor) return t.skip('needs the editor server (P9_EDITOR_HOST, or the fixtures reh.tar.gz)');
+  const instance = await daemon(t), home = await mkdtemp(path.join(os.tmpdir(), 'p9-dev-home-'));
+  await writeFile(path.join(instance.workspace, 'note.txt'), 'note\n');
+  const env = { ...process.env, HOME: home, PATH: editor.path, P9_EDITOR_HOST: editor.host }; delete env.ELECTRON_RUN_AS_NODE;
+  const launch = async () => {
+    const app = await _electron.launch({ args: [path.join(root, 'apps/desktop/start.cjs'), '--state', instance.state, '--user-data-dir=' + path.join(home, 'profile')], env, chromiumSandbox: true, timeout: 20000 });
+    const proc = app.process();
+    t.after(async () => { await Promise.race([app.close().catch(() => {}), sleep(15000)]); proc.kill(); });
+    const shell = await app.firstWindow();
+    await shellReady(shell);
+    const devWindow = app.waitForEvent('window', { predicate: page => page.url().startsWith('p9://dev/'), timeout: 60000 });
+    await shell.keyboard.press('Control+2');
+    const dev = await devWindow, errors = [];
+    dev.on('pageerror', error => errors.push(error.stack ?? error.message));
+    await dev.waitForFunction(() => window.devFocusReady || document.querySelector('#status')?.textContent, null, { timeout: 120000 });
+    assert.equal(await dev.locator('#status').textContent(), '');
+    return { app, shell, dev, errors };
+  };
+  // What the editor page shows (part widths, where the file list is, the view's width) and what the shell shows beside it.
+  const read = async ({ shell, dev }) => ({
+    ...await dev.evaluate(() => ({ width: innerWidth, ...Object.fromEntries(['sidebar', 'editor', 'panel', 'auxiliarybar'].map(name => {
+      const part = document.querySelector('.part.' + name), r = part?.getBoundingClientRect();
+      return [name, part && part.offsetParent !== null && r.width ? Math.round(r.width) : 0];
+    })), files: document.querySelector('.part.sidebar .explorer-folders-view') ? 'sidebar' : document.querySelector('.part.auxiliarybar .explorer-folders-view') ? 'auxiliarybar' : 'none' })),
+    ...await shell.evaluate(() => ({ closed: !!document.querySelector('.stage').dataset.devClosed, chat: document.querySelector('#side').hidden ? null : document.querySelector('#side').dataset.slot,
+      chatWidth: Math.round(document.querySelector('#side').getBoundingClientRect().width), tab: document.querySelector('#devTab .stab').textContent })),
+  });
+  const closedNow = got => got.closed && got.width === 348 && got.editor === 0 && got.panel === 0 && got.sidebar === 0 && got.files === 'auxiliarybar' && got.auxiliarybar > 250;
+  const one = await launch();
+  await one.dev.evaluate(() => window.devFocus.open('note.txt'));
+  await one.shell.click('#devClose');
+  await one.shell.waitForFunction(() => !!document.querySelector('.stage').dataset.devClosed, null, { timeout: 15000 });
+  await sleep(1000);
+  let got = await read(one);
+  console.log('NOTE closed: ' + JSON.stringify(got));
+  assert.ok(closedNow(got), 'closed: only the file list (348 px), no editor or panel: ' + JSON.stringify(got));
+  assert.equal(got.chat, 'dan-chat', 'the chat shows beside it');
+  assert.equal(got.tab, 'Files');
+  await shot(one.dev, 'o294-closed-dev');
+  await shot(one.shell, 'o294-closed-shell');
+  assert.deepEqual(online(one.errors), []);
+  await one.app.close();
+  // Restart: the same profile and workspace; the editor area is still closed.
+  const two = await launch();
+  await two.shell.waitForFunction(() => !!document.querySelector('.stage').dataset.devClosed, null, { timeout: 30000 });
+  await sleep(1500);
+  got = await read(two);
+  console.log('NOTE after restart: ' + JSON.stringify(got));
+  assert.ok(closedNow(got), 'still closed after a restart: ' + JSON.stringify(got));
+  await shot(two.dev, 'o294-restart-dev');
+  // Opening a file brings the editor back, the file list on the left again, and the file has the keyboard.
+  await two.dev.evaluate(() => window.devFocus.open('note.txt'));
+  await two.shell.waitForFunction(() => !document.querySelector('.stage').dataset.devClosed, null, { timeout: 15000 });
+  await sleep(1000);
+  got = await read(two);
+  console.log('NOTE after opening a file: ' + JSON.stringify(got));
+  assert.ok(!got.closed && got.width > 348 && got.editor > 0 && got.sidebar > 0 && got.files === 'sidebar' && got.auxiliarybar === 0, 'open again: ' + JSON.stringify(got));
+  assert.equal(got.tab, 'Editor');
+  assert.equal(await two.dev.evaluate(() => !!document.activeElement?.closest('.part.editor')), true, 'the opened file has the keyboard');
+  await shot(two.dev, 'o294-open-dev');
+  assert.deepEqual(online(two.errors), []);
+  console.log('PASS O294 close, restart, open');
+}));

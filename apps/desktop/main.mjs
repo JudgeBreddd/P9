@@ -1396,6 +1396,13 @@ export async function createDesktop({ state, open } = {}) {
     const { width, height } = devView.getBounds(), size = image.getSize();
     return 'data:image/jpeg;base64,' + (size.width > width ? image.resize({ width, height, quality: 'good' }) : image).toJPEG(80).toString('base64');
   });
+  // O294: the editor area's close button. Only the shell may ask; the editor page does it and says what it shows (p9dev:editor-closed).
+  ipcMain.handle('p9:dev-editor', async (event, ...args) => {
+    if (event.sender !== window.webContents || event.senderFrame !== window.webContents.mainFrame || event.senderFrame.url !== APP_URL
+        || args.length !== 1 || typeof args[0] !== 'boolean') throw new Error('ipc-sender-refused');
+    devView?.webContents.send('p9dev:editor', args[0]);
+    return { ok: true };
+  });
   cardsIpc(outer);
   // Settings: no argument reads them; one argument is the whole new shape, refused unless checkSettings takes it.
   ipcMain.handle('p9:settings', async (event, ...args) => {
