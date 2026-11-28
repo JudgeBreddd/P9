@@ -83,7 +83,8 @@ jobs:
         run: |
           heavy=true
           if [ "$EVENT" = pull_request ]; then
-            files=$(git diff --name-only HEAD^1 HEAD)
+            # --no-renames: a code file renamed to .md lists its old name too, so it is not read as Markdown-only (#574 review).
+            files=$(git diff --name-only --no-renames HEAD^1 HEAD)
             if [ -n "$files" ] && ! grep -qv '\.md$' <<<"$files" && ! grep -qE '^(README\.md|LICENSES\.md|third-party/)' <<<"$files"; then heavy=false; fi
           fi
           echo "heavy=$heavy" >> "$GITHUB_OUTPUT"; echo "heavy jobs: $heavy"
