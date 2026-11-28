@@ -1,7 +1,7 @@
 // Dev Focus: Monaco + VS Code services (the phase-2 editor, docs/spike-decision.md) against the desktop's loopback editor host.
 // Every write P9's editor makes inside the workspace goes through window.p9dev.save, which the desktop sends to the daemon's
 // guarded save (packages/files). Writes extensions, terminals or language servers make on the host are "runs as you, not guarded".
-import { initialize, getService, IFileService, IThemeService, IExtensionService, ITextFileService, IFileDialogService, IStorageService } from '@codingame/monaco-vscode-api';
+import { initialize, getService, IFileService, IThemeService, IExtensionService, ITextFileService, IFileDialogService, IStorageService, IWorkbenchLayoutService } from '@codingame/monaco-vscode-api';
 import getWorkbench from '@codingame/monaco-vscode-workbench-service-override';
 import { folderError } from '../desktop/dev-folder.mjs';
 import getModel from '@codingame/monaco-vscode-model-service-override';
@@ -31,6 +31,7 @@ import { registerExtension, ExtensionHostKind } from '@codingame/monaco-vscode-a
 import { URI } from '@codingame/monaco-vscode-api/vscode/vs/base/common/uri';
 import { RemoteFileSystemProviderClient } from '@codingame/monaco-vscode-remote-agent-service-override/vscode/vs/workbench/services/remote/common/remoteFileSystemProviderClient';
 import 'vscode/localExtensionHost';
+import { DEFAULT_EDITOR_MIN_DIMENSIONS } from '@codingame/monaco-vscode-api/vscode/vs/workbench/browser/parts/editor/editor'; // SPIKE o294-min0
 import '@codingame/monaco-vscode-theme-defaults-default-extension';
 import '@codingame/monaco-vscode-typescript-basics-default-extension';
 import '@codingame/monaco-vscode-python-default-extension';
@@ -340,7 +341,7 @@ let looking = Promise.resolve();
 window.p9dev.onLook(look => { looking = looking.then(() => followLook(look)).catch(error => console.error('p9: editor look failed:', error.message)); });
 await (await getService(IExtensionService)).whenInstalledExtensionsRegistered();
 // Hooks for the Electron tests (test/dev.test.mjs); the page's own code already holds this API.
-window.devFocus = { v, root, open: async name => v.window.showTextDocument(await v.workspace.openTextDocument(v.Uri.joinPath(v.Uri.parse(guardRoot.toString()), name)), { preview: false }) };
+window.devFocus = { minDims: DEFAULT_EDITOR_MIN_DIMENSIONS, layout: await getService(IWorkbenchLayoutService), v, root, open: async name => v.window.showTextDocument(await v.workspace.openTextDocument(v.Uri.joinPath(v.Uri.parse(guardRoot.toString()), name)), { preview: false }) };
 // p9 edit / p9 diff (threat model row 14): main sends only checked workspace-relative names, once this page can open them.
 const fileUri = name => v.Uri.joinPath(v.Uri.parse(guardRoot.toString()), name);
 window.p9dev.onOpen(async request => {
