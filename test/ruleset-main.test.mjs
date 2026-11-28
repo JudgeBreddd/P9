@@ -68,5 +68,8 @@ test("tests passes only when quick passed and each heavy job passed or was skipp
   assert.equal(passes('failure', 'skipped', 'skipped'), false);
   assert.equal(passes('skipped', 'skipped', 'skipped'), false, 'quick must have run');
   // #577 r1 #1: a run by hand skips quick on purpose; its tests (by hand) job passes (the jobs it ran are its result).
-  for (const linux of ['success', 'skipped']) assert.equal(passes('skipped', linux, 'skipped', { EVENT: 'workflow_dispatch' }), true, 'a run by hand');
+  // Named Linux, named Windows, bare.
+  for (const [linux, windows] of [['success', 'skipped'], ['skipped', 'success'], ['skipped', 'skipped']]) assert.equal(passes('skipped', linux, windows, { EVENT: 'workflow_dispatch' }), true, 'a run by hand');
+  // #577 r2: a heavy output that is neither true nor false (a broken quick step) does not let both jobs skip.
+  for (const HEAVY of ['', 'yes']) assert.equal(passes('success', 'skipped', 'skipped', { HEAVY }), false, `heavy '${HEAVY}'`);
 });

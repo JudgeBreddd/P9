@@ -344,6 +344,7 @@ jobs:
           echo "event $EVENT, quick $QUICK (heavy $HEAVY, draft ${DRAFT:-no}), linux $LINUX, windows $WINDOWS"
           [ "$EVENT" != workflow_dispatch ] || { echo "a run by hand: the jobs above are its result"; exit 0; }
           [ "$QUICK" = success ] || { echo "quick did not pass"; exit 1; }
+          case "$HEAVY" in true|false) ;; *) echo "quick gave heavy '$HEAVY', not true or false"; exit 1;; esac
           due=skipped; [ "$HEAVY" = true ] && [ "$DRAFT" != true ] && due=success
           for r in "$LINUX" "$WINDOWS"; do [ "$r" = success ] || [ "$r" = "$due" ] || { echo "a heavy job ended $r (due: $due)"; exit 1; }; done
 
