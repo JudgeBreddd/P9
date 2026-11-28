@@ -1038,7 +1038,7 @@ test('O294: no editor tab and the chat beside: the file list and the chat, no ed
   const pages = () => app.evaluate(({ webContents }) => ({ gone: globalThis.o294gone ?? null, ids: webContents.getAllWebContents().filter(w => w.getURL().startsWith('p9://dev/')).map(w => w.id) }));
   for (const round of [1, 2]) {
     const { ids: [id] } = await pages();
-    await app.evaluate(({ webContents }, id) => { const w = webContents.fromId(id); globalThis.o294gone = false; w.once('render-process-gone', () => { globalThis.o294gone = true; }); w.forcefullyCrashRenderer(); }, id);
+    await app.evaluate(({ webContents }, id) => { const w = webContents.fromId(id); globalThis.o294gone = false; w.once('render-process-gone', () => { globalThis.o294gone = true; }); process.kill(w.getOSProcessId(), 'SIGKILL'); }, id); // forcefullyCrashRenderer left it running here
     await sleep(3000);
     assert.deepEqual(await pages(), { gone: true, ids: [id] }, 'crash ' + round + ': the editor page is gone and not rebuilt at once');
     const next = app.waitForEvent('window', { predicate: page => page.url().startsWith('p9://dev/'), timeout: 60000 });
