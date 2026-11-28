@@ -48,7 +48,7 @@ export const WIDGETS = Object.freeze([
   { id: 'waiting', label: 'Waiting on you' }, { id: 'usage', label: 'Usage' }, { id: 'apps', label: 'Apps and pages' },
   { id: 'notifications', label: 'Notifications' }, { id: 'primary', label: 'Main project' },
   { id: 'idea', tile: true, label: '+ New idea' }, { id: 'sprint', tile: true, label: 'Sprint status' }, { id: 'edit', tile: true, label: 'Edit names and icons' },
-].map(Object.freeze));
+].map((w) => Object.freeze(w)));
 // CAT-2: the guide's and the onboarding card's closing line about File protection.
 export const PROTECT_AFTER = 'Turn File protection back on once the build is done.';
 // CAT-2: the pace mark (A3), for the Usage page (helpers.mjs), the plan_usage tool (limits.mjs) and the history table's CHECK

@@ -28,7 +28,7 @@ export const TMUX_MISSING = 'Terminals need tmux, and the computer P9 runs on do
 export const TMUX_MISSING_HERE = 'Terminals need tmux, and it is not installed. Open Settings → Setup → Terminal to install it with your admin password, then press Refresh.';
 // What they say when this computer has no terminal backend, or the Windows one could not start (issue #11).
 export const unavailableText = (reason) => "Terminal isn't available on this computer yet" + (reason ? ': ' + reason : '.');
-export function createTerminal({ screen, state, connect, open }) {
+export function createTerminal({ screen, state, connect, open = null }) {
   const term = { view: null, socket: null, leases: [] };
   function show(text, live = false) {
     state(text, live);

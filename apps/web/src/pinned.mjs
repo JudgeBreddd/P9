@@ -8,7 +8,7 @@ export const isReport = id => /^ready-[0-9a-f-]{36}$/.test(id);
 // O109: a worker report the user closed stays closed until it says something new (the same worker's next report, or another worker's).
 export const reportKey = (s, c) => s.id + '|' + c.id + '|' + c.text.length + '|' + [...c.text].reduce((h, ch) => (h * 31 + ch.codePointAt(0)) | 0, 0);
 // The closed report keys, kept in this browser (desktop and phone each keep their own).
-export const SHUT = { keys: null, get() { if (!this.keys) try { this.keys = new Set(JSON.parse(localStorage.getItem('p9-reports-closed') || '[]')); } catch { this.keys = new Set(); } return this.keys; },
+export const SHUT = { keys: /** @type {Set<string> | null} */ (null), get() { if (!this.keys) try { this.keys = new Set(JSON.parse(localStorage.getItem('p9-reports-closed') || '[]')); } catch { this.keys = new Set(); } return this.keys; },
   add(k) { this.get().add(k); try { localStorage.setItem('p9-reports-closed', JSON.stringify([...this.keys])); } catch {} } };
 // shut: the closed report keys (SHUT.get()). Given, only the newest worker report not closed is pinned, with a close button; the
 // others scroll with the chat (chat-view's 'report' events). Not given (phone), every card is pinned as before.
