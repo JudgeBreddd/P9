@@ -36,7 +36,9 @@ test('O164 done means merged: the worker\'s ring counts a merged item only — a
   // P9 learns Claude's model and effort lists when it first runs: one chat before the press.
   const first = (await call(instance, '/chat', 'POST', { provider: 'claude' })).body.conversation;
   await call(instance, `/chat/${first}/prompt`, 'POST', { text: 'config' });
-  for (let i = 0; i < 100; i += 1) { if ((await call(instance, `/chat/events?after=0&only=${first}`)).body.events.some((e) => e.data?.content?.text?.startsWith('config:'))) break; await new Promise((r) => setTimeout(r, 200)); }
+  let configured = false;
+  for (let i = 0; i < 100 && !configured; i += 1) { configured = (await call(instance, `/chat/events?after=0&only=${first}`)).body.events.some((e) => e.data?.content?.text?.startsWith('config:')); if (!configured) await new Promise((r) => setTimeout(r, 200)); }
+  assert.ok(configured, 'no config reply from the first chat: Start would not know the model lists');
 
   // A repository with a real remote, as a hosted one: the sprint's clone fetches its main line from it.
   const repo = path.join(ws, 'repo'), remote = path.join(ws, 'remote.git');
