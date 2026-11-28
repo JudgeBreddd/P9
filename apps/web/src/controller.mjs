@@ -1522,6 +1522,9 @@ const amSendNote = async (browser) => {
     // Opened in the browser: the note stays to copy until the issue is filed there (GitHub issue #4 item 6).
     if (!r.body.opened) amText.value = '';
     amNote.textContent = r.body.opened ? 'Opened GitHub in your browser: finish the issue there. Your note is still here to copy.' + (r.body.cut ? ' It was too long for a link, so GitHub got only the start' + (r.body.kept ? ' (the first ' + r.body.kept.toLocaleString('en-US') + ' of ' + r.body.total.toLocaleString('en-US') + ' characters)' : '') + '; paste the rest from here.' : '') : 'Sent as issue #' + r.body.number + '. Thanks.';
+    // GitHub issue #568 (O298): GitHub got the whole note, so the box closes (the text stays for a reopen). A cut note
+    // keeps the box open: the rest is pasted from it.
+    if (r.body.opened && !r.body.cut) amDlg.close();
   } catch (err) { amNote.textContent = err.message; }
   finally { amCheck(); }
 };

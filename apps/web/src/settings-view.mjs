@@ -606,10 +606,11 @@ const WIZ_ERR = {
 // The hosts are the Host lines of ~/.ssh/config (W.hosts, read when the choice opens); connecting reloads this window onto that P9.
 // Attempt 2 items 1-2: the wizard connects itself. One field: a remote already used, a Host from ~/.ssh/config, or a new
 // user@address (kept in Settings > Remote's list too). A password, if ssh needs one, is asked in its own window (row 78).
+// GitHub issue #566 (O296): it starts on the remote last used, else empty: a first Host put there filtered the list to itself.
 function wizRemote(btn) {
   const h = W.hosts, hosts = [...new Set([...(h?.remotes || []), ...(h?.hosts || [])])], opts = hosts.map(x => '<option value="' + esc(x) + '"></option>').join('');
   return '<div data-wiz-remote>'
-    + `<div class="set-row"><span><strong>Which remote</strong><span class="muted sm">A Host name from your ssh config, or user@address. If ssh asks for a password, P9 asks you for it in its own window and never saves it.</span></span><span class="spacer"></span><input data-slot="input" id="welHost" list="welHosts" value="${esc(h?.last || hosts[0] || '')}" placeholder="user@address" aria-label="Remote to connect to" maxlength="253" autocomplete="off" spellcheck="false"><datalist id="welHosts">${opts}</datalist>${btn('connect', 'Connect', 'default')}</div>`
+    + `<div class="set-row"><span><strong>Which remote</strong><span class="muted sm">A Host name from your ssh config, or user@address. If ssh asks for a password, P9 asks you for it in its own window and never saves it.</span></span><span class="spacer"></span><input data-slot="input" id="welHost" list="welHosts" value="${esc(h?.last || '')}" placeholder="user@address" aria-label="Remote to connect to" maxlength="253" autocomplete="off" spellcheck="false"><datalist id="welHosts">${opts}</datalist>${btn('connect', 'Connect', 'default')}</div>`
     + (W.note.remote?.error ? `<p class="warn sm" role="alert">${W.note.remote.error === 'host' ? 'Type a Host name or user@address, with no spaces.' : 'Could not connect (' + esc(W.note.remote.error) + ').'}</p>` : '') + '</div>';
 }
   return { saveSettings, applySettings, settingsAt, renderSettings, refreshDefaults, loadSetup, setupDone, welSkipped, AGENTS_PICK, wizPicked, wizReady, ADMIN_NAMES, STEP_NAMES, checkSetup, skipWelcome, tour, firstRun, W, wizPaths, wizChoosing, wizSteps, welcome, wizRefresh, WIZ_ERR, wizRemote };

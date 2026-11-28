@@ -139,12 +139,14 @@ test('Anymouse in the desktop: the box sends, and with no token main opens only 
   assert.equal(await page.locator('#amSend').isDisabled(), true);
   await page.locator('#amText').fill('<img src=x onerror=alert(1)> the save button');
   await page.locator('#amSend').click();
-  await page.locator('#amNote', { hasText: 'Opened GitHub' }).waitFor({ timeout: 10000 });
+  // GitHub issue #568 (O298): GitHub got the whole note, so the box closes once the page is opened.
+  await page.waitForFunction(() => !document.querySelector('#amDlg').open, null, { timeout: 10000 });
   assert.equal(await page.locator('#amDlg img').count(), 0, 'the note never becomes markup');
   // The note stays to copy (GitHub issue #4 item 6). The repo is public now, so no "private ... 404" warning.
-  assert.match(await page.locator('#amNote').innerText(), /^Opened GitHub in your browser: finish the issue there\. Your note is still here to copy\./);
-  assert.doesNotMatch(await page.locator('#amNote').innerText(), /private|404/);
-  assert.equal(await page.locator('#amText').inputValue(), '<img src=x onerror=alert(1)> the save button');
+  assert.match(await page.locator('#amNote').textContent(), /^Opened GitHub in your browser: finish the issue there\. Your note is still here to copy\./);
+  assert.doesNotMatch(await page.locator('#amNote').textContent(), /private|404/);
+  await page.locator('#amBtn').click();
+  assert.equal(await page.locator('#amText').inputValue(), '<img src=x onerror=alert(1)> the save button', 'reopened, the note is still there');
   let url = '';
   for (let i = 0; i < 50 && !url; i++) { url = await readFile(opened, 'utf8').catch(() => ''); if (!url) await new Promise((r) => setTimeout(r, 100)); }
   assert.ok(url.startsWith(NEW_ISSUE), url);
@@ -219,6 +221,7 @@ test('D13 in the desktop: a long note opens the cut link and the box says how ma
   assert.ok(all >= note.length + footer && all <= note.length + footer + 203, all + ' for a ' + note.length + '-character note');
   assert.ok(Number(kept.replaceAll(',', '')) < all);
   assert.equal(await page.locator('#amText').inputValue(), note, 'the whole note stays in the box');
+  assert.equal(await page.locator('#amDlg').evaluate((d) => d.open), true, 'a cut note keeps the box open to paste the rest from (O298)');
   let url = '';
   for (const end = Date.now() + 10000; Date.now() < end && !url; await new Promise((r) => setTimeout(r, 100))) url = (await readFile(opened, 'utf8').catch(() => '')).trim();
   assert.ok(url.startsWith(NEW_ISSUE) && url.length <= 7000, url.length + ' ' + url.slice(0, 60));

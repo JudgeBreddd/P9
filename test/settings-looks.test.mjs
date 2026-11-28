@@ -236,6 +236,12 @@ test('DUWOP themes: exactly the 11 kept themes are offered (O119), and the comma
   await page.keyboard.press('Control+k'); await page.locator('#palIn').fill('Look:');
   // A row's text ends with its Enter hint on a second line; the look's name is the first.
   assert.deepEqual((await page.locator('#palList li[data-i]').allInnerTexts()).map((x) => x.split('\n')[0]), ['Look: Night Drive', 'Look: Duskwood'], 'the command palette names only kept looks');
+  // GitHub issue #567 (O297): a click inside the palette keeps it open; a click outside it closes it, as Escape does.
+  const palOpen = () => page.locator('#palette').evaluate((d) => d.open);
+  await page.locator('#palIn').click(); assert.equal(await palOpen(), true, 'a click inside keeps the palette open');
+  await page.mouse.click(4, 4); await page.waitForFunction(() => !document.querySelector('#palette').open, null, { timeout: 3000 }).catch(() => {});
+  assert.equal(await palOpen(), false, 'a click outside closes the palette');
+  await page.keyboard.press('Control+k'); assert.equal(await palOpen(), true);
   await page.keyboard.press('Escape');
   const looks = new Map(), missing = [];
   for (const id of ids) {

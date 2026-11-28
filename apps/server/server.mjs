@@ -494,6 +494,15 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
     return reply(c, done.error ? { status: 409, ...done } : { status: 200, spaceName: name });
   });
   // New idea: one new file in _ideas/ (or _ideas/needs-done/), named as workspace-hub's new_idea names it; never replaces one.
+  // GitHub issue #572 (O299): with no _ideas/ at the root, the one folder down that has one (notes/_ideas, with the workspace
+  // one folder above notes). Two or more are named in the 404, not guessed; links are not followed (readdir's isDirectory).
+  const ideasFolder = async () => {
+    const at = (relative) => stat(path.join(workspace, relative)).then((s) => s.isDirectory(), () => false);
+    if (await at('_ideas')) return '_ideas';
+    const found = [];
+    for (const entry of await readdir(workspace, { withFileTypes: true }).catch(() => [])) if (entry.isDirectory() && await at(entry.name + '/_ideas')) found.push(entry.name + '/_ideas');
+    return found.length === 1 ? found[0] : found.sort();
+  };
   api.post('/mission/idea', async (c) => {
     const { name, text, needs_done: needsDone } = (await json(c)) ?? {};
     if (typeof name !== 'string' || typeof text !== 'string' || typeof needsDone !== 'boolean' || name.length > 200) return reply(c, { status: 400, error: 'invalid-idea' });
@@ -502,7 +511,9 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
     const slug = base.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 120);
     if (!slug) return reply(c, { status: 400, error: 'give it a name' });
     const file = `${slug}.${ext.toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 10) || 'md'}`;
-    const relative = ['_ideas', ...(needsDone ? ['needs-done'] : []), file].join('/');
+    const ideas = await ideasFolder();
+    if (Array.isArray(ideas)) return reply(c, { status: 404, error: ideas.length ? 'more than one _ideas folder: ' + ideas.join(', ') : 'no _ideas folder' });
+    const relative = [ideas, ...(needsDone ? ['needs-done'] : []), file].join('/');
     try { await createFile(workspace, relative, text.trimEnd() + '\n'); }
     catch (error) {
       if (error.code === 'EEXIST') return reply(c, { status: 409, error: `${file} already exists` });
