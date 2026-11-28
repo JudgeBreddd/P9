@@ -92,6 +92,7 @@ test('C1: `report <log>` says passed, failed or no result for each quarantined t
   assert.match((await report(`2026-11-28T10:00:00.0000000Z ✖ failed now: ${q.name} (${q.file}:12)\n  AssertionError\n`))[0], /^- failed: /);
   // #580 r1: only the exact file and title count: a longer title's pass, another file's failure, spec's fileless ✖ line.
   assert.match((await report(`P9_PASS test/other.test.mjs :: ${q.name}\n# a comment naming ${q.name}\n`))[0], /^- no result /, 'a pass from another file or a mention is no result');
+  assert.match((await report(`P9_PASS ${q.file} :: ${q.name}\n✖ failed now: ${q.name} (${q.file}:12)\n`))[0], /^- passed and failed: /, 'both lines');
   assert.match((await report(`P9_PASS ${q.file} :: ${q.name} and more\n✖ failed now: ${q.name} (test/other.test.mjs:3)\n  ✖ ${q.name} (3.1s)\n`))[0], /^- no result /, 'a longer title, another file, a fileless line');
   assert.equal((await report('')).length, list.length, 'one line per entry');
 });

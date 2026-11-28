@@ -106,7 +106,12 @@ async function main() {
       if (heavy === 'true') due.push(r);
     }
   }
-  const heavyRan = (r) => { const heavy = blocking(r).filter((j) => /^(linux|windows) \(/.test(j.name)); return heavy.length && heavy.every((j) => j.conclusion === 'success'); };
+  // #580 r2: one run must carry the whole heavy result: both platforms ran and passed, and its `tests` job passed.
+  const heavyRan = (r) => {
+    const jobs = blocking(r), heavy = jobs.filter((j) => /^(linux|windows) \(/.test(j.name));
+    return ['linux', 'windows'].every((p) => heavy.some((j) => j.name.startsWith(p + ' ('))) && heavy.every((j) => j.conclusion === 'success')
+      && jobs.some((j) => j.name === 'tests' && j.conclusion === 'success');
+  };
   if (due.length && !due.some(heavyRan)) refuse(`item ${item}: the heavy jobs were due on ${commit.slice(0, 8)} and no run passed them (a draft's run skips them); mark the PR ready (gh pr ready) and wait for the full run`);
   if (!seen.some((s) => s.ok)) refuse(`item ${item}: the CI logs on ${commit.slice(0, 8)} have no P9_PASS lines (the per-test file evidence test/file-limit.mjs writes)`);
   for (const t of tests) {

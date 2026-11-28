@@ -223,7 +223,7 @@ jobs:
       - name: Quarantine summary
         if: ${{ always() && matrix.shard == 'quarantine' }}
         run: |
-          [ -f "$RUNNER_TEMP/quarantine-reported" ] || printf '### Quarantined tests (not blocking)\n- not run: a step before Tests failed (see the job log)\n' >> "$GITHUB_STEP_SUMMARY"
+          [ -f "$RUNNER_TEMP/quarantine-reported" ] || printf '### Quarantined tests (not blocking)\n- no report: a step before Tests failed, or Tests stopped before its summary (see the job log)\n' >> "$GITHUB_STEP_SUMMARY"
       # The output the result rests on, kept on every run (a failure too), not only in the job log.
       - name: Test output
         if: always()

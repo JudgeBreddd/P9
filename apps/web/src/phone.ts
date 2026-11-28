@@ -2810,7 +2810,7 @@ one('#mission').addEventListener('click', (event) => {
     if (opened) { button.closest('dialog')?.close(); show('files'); } else button.lastElementChild!.textContent = one('#fileState').textContent;
   });
 });
-one<HTMLButtonElement>('#closeFile').onclick = () => { const back = state.file?.root; state.file = null; showImage(false); one<HTMLElement>('#fileView').hidden = true; one<HTMLElement>('#browser').hidden = false; online(); if (back) show('mission'); else void loadFolder(); };
+one<HTMLButtonElement>('#closeFile').onclick = () => { const back = state.file?.root; state.file = null; opening++; /* #580 r2: a load still out is stale now */ showImage(false); one<HTMLElement>('#fileView').hidden = true; one<HTMLElement>('#browser').hidden = false; online(); if (back) show('mission'); else void loadFolder(); };
 // A .md file can be read rendered: md shows raw HTML as text and links and images as plain text (threat model row 18).
 const preview = (on: boolean) => {
   one<HTMLElement>('#rendered').hidden = !on; one<HTMLElement>('#editor').hidden = on;
@@ -2835,16 +2835,17 @@ function showImage(on: boolean) {
 // #580 r1 (O293): each open takes a number; a load that settles after a newer open (resolved or rejected) changes nothing.
 let opening = 0;
 async function openImage(path: string) {
-  opening++;
+  const mine = ++opening;
   const view = one<HTMLElement>('#imageView'), name = path.split('/').pop()!, note = (text: string) => { view.innerHTML = '<p class="note">' + esc(text) + '</p>'; };
   state.file = null; showImage(true); note('Loading…');
   one('#openPath').textContent = name; one<HTMLElement>('#openPath').title = path; one<HTMLElement>('#browser').hidden = true; one<HTMLElement>('#fileView').hidden = false;
   one('#fileState').textContent = 'Read-only'; one<HTMLElement>('#conflict').hidden = true;
   try {
     const src = fileImageSrc(await request('/files/image?' + at(path)));
+    if (mine !== opening) return false;
     if (src) view.innerHTML = '<img src="' + src + '" alt="' + esc(name) + '">'; else note(fileImageError['not-an-image']);
     online();
-  } catch (error) { const code = (error as Error).message; note((fileImageError as Record<string, string>)[code] ?? 'Not readable: ' + code); }
+  } catch (error) { if (mine !== opening) return false; const code = (error as Error).message; note((fileImageError as Record<string, string>)[code] ?? 'Not readable: ' + code); }
   return true;
 }
 async function openFile(path: string, root?: string) {
@@ -2856,8 +2857,9 @@ async function openFile(path: string, root?: string) {
     if (mine !== opening) return false; // a newer open started while this request was out: its file is the open one
     const opened = state.file = { path, hash: file.hash, content: file.content, root, ...(!root && place && { place }), ...(file.readOnly && { readOnly: true }) };
     await putText(file.content);
-    // #578 r1: the file was closed or replaced while the editor loaded; no "Loaded" for a file that is not the open one.
-    if (state.file !== opened) throw new Error('file-changed');
+    // #578 r1, #580 r2: the file was closed or replaced, or a newer open started, while the editor loaded; no "Loaded"
+    // for a file that is not the open one.
+    if (state.file !== opened || mine !== opening) throw new Error('file-changed');
     one('#openPath').textContent = path.split('/').pop()!; one<HTMLElement>('#openPath').title = path; one<HTMLElement>('#browser').hidden = true; one<HTMLElement>('#fileView').hidden = false;
     preview(!!root || /\.md$/i.test(path)); // O67: a Markdown file opens to read; Edit is in the bar's menu
     // review 3 L2: a _private note with File protection on reads, but its save would be refused

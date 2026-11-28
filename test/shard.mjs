@@ -30,8 +30,9 @@ if (mode === 'pattern' || mode === 'quarantine') {
 if (mode === 'report') {
   const q = JSON.parse(readFileSync(new URL('quarantine.json', import.meta.url), 'utf8')), log = readFileSync(list[0], 'utf8').split('\n').map((l) => l.replace(/^\S+Z /, '').trimEnd());
   for (const t of q) {
-    const outcome = log.includes(`P9_PASS ${t.file} :: ${t.name}`) ? 'passed'
-      : log.some((l) => l.startsWith(`✖ failed now: ${t.name} (${t.file}:`)) ? 'failed' : 'no result (the test did not run: fix the entry)';
+    // #580 r2: both lines (a retry, or two runs of one file) say so instead of passed.
+    const passed = log.includes(`P9_PASS ${t.file} :: ${t.name}`), failed = log.some((l) => l.startsWith(`✖ failed now: ${t.name} (${t.file}:`));
+    const outcome = passed && failed ? 'passed and failed' : passed ? 'passed' : failed ? 'failed' : 'no result (the test did not run: fix the entry)';
     console.log(`- ${outcome}: ${t.name} (${t.file}, ${t.row})`);
   }
   process.exit(0);

@@ -195,7 +195,12 @@ test('green check refuses a commit whose only run skipped heavy jobs that were d
   const shaped = (list) => ({ jobs: list.map(({ log, ...j }) => j), logs: Object.fromEntries(list.filter((j) => j.log).map((j) => [j.id, j.log])) });
   const draft = shaped([quick(11, true), { id: 12, name: 'linux (0)', conclusion: 'skipped' }, { id: 13, name: 'windows (x64)', conclusion: 'skipped' }]);
   refused(run({ runs: [{ ...base, id: 1 }], jobsOf: { 1: draft.jobs }, logs: draft.logs }), 'the heavy jobs were due on abcdef12 and no run passed them');
-  const full = shaped([quick(21, true), { id: 22, name: 'linux (0)', conclusion: 'success', log: LOG }, { id: 23, name: 'windows (x64)', conclusion: 'success', log: LOG }]);
+  const full = shaped([quick(21, true), { id: 22, name: 'linux (0)', conclusion: 'success', log: LOG }, { id: 23, name: 'windows (x64)', conclusion: 'success', log: LOG }, { id: 24, name: 'tests', conclusion: 'success', log: 'tests ok' }]);
+  // #580 r2: one platform, or both without a passed `tests` job, is not the heavy result.
+  for (const drop of [23, 24]) {
+    const part = shaped([quick(21, true), ...full.jobs.filter((j) => j.id !== 21 && j.id !== drop).map((j) => ({ ...j, log: full.logs[j.id] }))]);
+    refused(run({ runs: [{ ...base, id: 2 }], jobsOf: { 2: part.jobs }, logs: part.logs }), 'the heavy jobs were due on abcdef12 and no run passed them');
+  }
   const both = run({ runs: [{ ...base, id: 1 }, { ...base, id: 2 }], jobsOf: { 1: draft.jobs, 2: full.jobs }, logs: { ...draft.logs, ...full.logs } });
   assert.equal(both.status, 0, both.out);
   const md = shaped([quick(11, false), { id: 12, name: 'linux (0)', conclusion: 'skipped' }]);
