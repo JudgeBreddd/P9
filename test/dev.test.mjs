@@ -801,15 +801,17 @@ test('Event Horizon Azure: Dev Focus paints the review fixture in the theme; fen
     const { v } = window.devFocus, editor = v.window.visibleTextEditors.find(e => e.document.fileName.endsWith(name));
     const shown = await v.window.showTextDocument(editor.document, { viewColumn: editor.viewColumn, preserveFocus: false });
     // The token checks above scroll the file; an off-screen cursor is not drawn (width 0), so bring it back into view.
-    shown.revealRange(shown.selection, v.TextEditorRevealType.AtTop);
-    await new Promise(resolve => setTimeout(resolve, 400));
+    // O293: the editor draws it on a later frame; 400 ms was sometimes too soon on CI (width 0, display none). Up to 5 s.
+    const drawn = () => document.querySelector('.editor-group-container .monaco-editor.focused .cursor')?.getBoundingClientRect().width > 0;
+    let waited = 0;
+    for (; waited < 5000 && !drawn(); waited += 200) { shown.revealRange(shown.selection, v.TextEditorRevealType.AtTop); await new Promise(resolve => setTimeout(resolve, 200)); }
     const groups = [...document.querySelectorAll('.editor-group-container')], mine = groups.find(g => g.querySelector('.tab.active')?.textContent.includes(name)), other = groups.find(g => g !== mine);
     // The focused editor's own cursor: a group can hold other editors' hidden ones (O293: width 0 on CI).
     const cursors = [...mine.querySelectorAll('.cursor')], cursor = mine.querySelector('.monaco-editor.focused .cursor') ?? cursors[0], line = mine.querySelector('.tab.active > .tab-border-top-container');
     return { lang: document.documentElement.dataset.lang, cursor: getComputedStyle(cursor).backgroundColor, width: cursor.getBoundingClientRect().width,
       border: getComputedStyle(mine).outlineColor, other: getComputedStyle(other).outlineColor, tab: getComputedStyle(line).backgroundColor, tabHeight: line.getBoundingClientRect().height,
       focused: mine.contains(document.activeElement),
-      ...(cursor.getBoundingClientRect().width === 2 ? {} : { cursors: cursors.map(c => ({ w: c.getBoundingClientRect().width, display: getComputedStyle(c).display, shown: getComputedStyle(c).visibility, style: c.getAttribute('style'), editor: c.closest('.monaco-editor')?.className })) }) };
+      ...(cursor.getBoundingClientRect().width === 2 ? {} : { waited, cursors: cursors.map(c => ({ w: c.getBoundingClientRect().width, display: getComputedStyle(c).display, shown: getComputedStyle(c).visibility, style: c.getAttribute('style'), editor: c.closest('.monaco-editor')?.className })) }) };
   }, name);
   const inMd = await focus('README.md');
   await shot(dev, 'o17-dev-focus-markdown');
