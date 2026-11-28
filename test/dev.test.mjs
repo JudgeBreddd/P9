@@ -1035,12 +1035,12 @@ test('O294: no editor tab and the chat beside: the file list and the chat, no ed
   await shell.click('#sideToggle');
   await until('the chat on again', g => filesOnly(g) && g.list === wide && g.chat > 0);
   // A crashed editor page with the chat beside it stays down until the view is next placed; it is not rebuilt at once. Twice.
-  const pages = () => app.evaluate(({ webContents }) => webContents.getAllWebContents().filter(w => w.getURL().startsWith('p9://dev/')).map(w => [w.id, w.isCrashed()]));
+  const pages = () => app.evaluate(({ webContents }) => ({ gone: globalThis.o294gone ?? null, ids: webContents.getAllWebContents().filter(w => w.getURL().startsWith('p9://dev/')).map(w => w.id) }));
   for (const round of [1, 2]) {
-    const [[id]] = await pages();
-    await app.evaluate(({ webContents }, id) => webContents.fromId(id).forcefullyCrashRenderer(), id);
+    const { ids: [id] } = await pages();
+    await app.evaluate(({ webContents }, id) => { const w = webContents.fromId(id); globalThis.o294gone = false; w.once('render-process-gone', () => { globalThis.o294gone = true; }); w.forcefullyCrashRenderer(); }, id);
     await sleep(3000);
-    assert.deepEqual(await pages(), [[id, true]], 'crash ' + round + ': the editor page is not rebuilt at once');
+    assert.deepEqual(await pages(), { gone: true, ids: [id] }, 'crash ' + round + ': the editor page is gone and not rebuilt at once');
     const next = app.waitForEvent('window', { predicate: page => page.url().startsWith('p9://dev/'), timeout: 60000 });
     await shell.click('#sideToggle'); // the chat off places the view, which opens the editor again
     dev = await next;
