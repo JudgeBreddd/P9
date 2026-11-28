@@ -1059,7 +1059,12 @@ test('O294: no editor tab and the chat beside: the file list and the chat, no ed
     await until('zoom ' + z + ', the divider moved 48', g => near(g) && Math.abs(g.list - before - 48) <= 3 && Math.abs(g.view.width - g.page * z) <= 3);
     if (z > 1) await seen('o294-11-zoomed');
     await shell.keyboard.press('ArrowLeft'); await shell.keyboard.press('ArrowLeft');
-    await until('zoom ' + z + ', the divider back', g => near(g) && Math.abs(g.list - before) <= 3);
+    got = await until('zoom ' + z + ', the divider back', g => near(g) && Math.abs(g.list - before) <= 3);
+    // #581 r2 (O293): leaving Dev Focus and coming back keeps the view's width to the pixel (it grew 2 to 6 px each time).
+    const kept = got.view.width;
+    for (let i = 1; i <= 2; i++) { await shell.keyboard.press('Control+1'); await sleep(300); await shell.keyboard.press('Control+2'); await until('zoom ' + z + ', Dev Focus again ' + i, near); }
+    await sleep(1000);
+    assert.equal((await read()).view.width, kept, 'zoom ' + z + ': two focus round-trips keep the view width');
   }
   await zoom(1);
   await until('zoom 1 again', g => filesOnly(g) && g.chat > 0);
