@@ -280,7 +280,7 @@ const usedAgent = a => { try { localStorage.setItem('p9-agent-last', a); } catch
 // file list leaves the icon strip, showing it again brings the width back. With the chat off, no tab open is the editor's own
 // empty page, as before.
 const LIST_MIN = 170, LIST_START = 300; // the editor's narrowest file list, and its first width
-let devFiles = null, devWide = null, devKept = null, devWhole = false; // devWhole: the last word came while Dev Focus showed the whole editor
+let devFiles = null, devWide = null, devKept = null;
 // Not with both the icon strip and the file list hidden: there would be nothing to show, so the editor's empty page stays.
 const devOnly = () => S.focus === 'dev' && devFiles?.tabs === 0 && devFiles.rest + devFiles.list > 0 && !!side.current() && side.current().mode !== 'full';
 const devBeside = () => {
@@ -316,9 +316,8 @@ function devFilesSaid(state) {
     else if (!had.list && state.list) devWide = devKept ?? state.rest + Math.max(state.list, LIST_START);
   }
   // The whole editor showing (the chat off), its own edge resized the file list: the next files-only starts from that (#583 r1).
-  const whole = !!state && S.focus === 'dev' && !devOnly();
-  if (devWhole && whole && had?.list && state.list && had.list !== state.list) devWide = null;
-  devWhole = whole;
+  // Leaving files-only keeps the list's width, so that sends no word; a changed width while whole is the editor's edge moved.
+  if (state && S.focus === 'dev' && !devOnly() && had?.list && state.list && had.list !== state.list) devWide = null;
   // Its listeners place the view; with no panel nothing changes. Not for a page that is gone (null): placing the view opens
   // the editor again, and a page that crashed is rebuilt on the next open, not at once (#581 r1).
   if (state && side.current()) side.apply();
