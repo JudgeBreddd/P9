@@ -89,7 +89,7 @@ test('green check refuses CI that is missing, pending or red, and a gh that fail
 test('green check refuses a named test that is missing, failed, or matches more than one passed line', () => {
   refused(run({ logs: { 11: LOG.replaceAll('alpha works', 'alpha broke') } }), 'test/a.test.mjs::alpha works has no passed line');
   refused(run({ logs: { 11: LOG + '\n2026-11-20T10:00:01.0000000Z   ✖ alpha works (3ms)' } }), 'test/a.test.mjs::alpha works failed in CI (1 ✖ line)');
-  refused(run({ logs: { 11: LOG + '\n2026-11-20T10:00:01.0000000Z P9_PASS test/b.test.mjs :: beta works again' } }), 'beta works matches 2 passed lines in one CI job');
+  refused(run({ logs: { 11: LOG + '\n2026-11-20T10:00:01.0000000Z P9_PASS test/b.test.mjs :: beta works again' } }), 'beta works matches 2 passed tests');
 });
 
 test('green check refuses a Tests selector that is not a test file and a title', () => {
@@ -149,16 +149,16 @@ test('green check ignores the advisory quarantine job: its pass is not a second 
   assert.equal(red.status, 0, red.out);
 });
 
-// C3 (O288), #574 round 1 blocker 1: marking a draft ready while its run is going cancels that run and starts another on the
-// same commit, and reopening a green PR runs it again. The gate reads only each workflow's newest run on the commit.
-// #574 r1-r4: every run on the commit must be complete and green, from any PR or event; a cancelled run is not green, and the
-// refusal says a re-run clears it. A test passing in two runs counts once; two passed lines in one job are ambiguous.
+// C3 (O288), #574 r1-r5: every run on the commit must be complete and green, from any PR or event; a cancelled run is not
+// green, and the refusal names the run to re-run. A test passing in two runs counts once; a name matching two different
+// titles, in one job or across jobs, is ambiguous.
 test('green check: any red or cancelled run on the commit refuses, even a different PR\'s; a test in two green runs counts once', () => {
   const green = { id: 1, name: 'Tests', workflow_id: 7, event: 'pull_request', status: 'completed', conclusion: 'success' };
   const cancelled = { ...green, id: 2, conclusion: 'cancelled' }, red = { ...green, id: 2, conclusion: 'failure' };
   const jobsOf = { 1: [{ id: 11, name: 'linux (0)', conclusion: 'success' }], 2: [{ id: 21, name: 'linux (0)', conclusion: 'success' }] };
   // A cancelled run before or after a green one (a draft made ready mid-run, a cancelled ready run), or another workflow's.
-  refused(run({ runs: [cancelled, green], jobsOf, logs: { 11: LOG, 21: LOG } }), 'is not green (Tests cancelled); re-run a cancelled run');
+  refused(run({ runs: [cancelled, green], jobsOf, logs: { 11: LOG, 21: LOG } }), 'is not green (Tests cancelled); re-run it: gh run rerun 2');
+  refused(run({ runs: [green, { ...cancelled, id: 0 }], jobsOf: { ...jobsOf, 0: [] }, logs: { 11: LOG } }), 'is not green (Tests cancelled); re-run it: gh run rerun 0');
   refused(run({ runs: [green, { ...cancelled, id: 3, name: 'scan', workflow_id: 9 }], jobsOf: { ...jobsOf, 3: [] }, logs: { 11: LOG } }), 'is not green (scan cancelled)');
   // The same head on two PRs: a green run for the other PR does not hide this PR's red run, in either order.
   refused(run({ runs: [red, green], jobsOf, logs: { 11: LOG, 21: LOG } }), 'is not green (Tests failure)');
@@ -166,9 +166,12 @@ test('green check: any red or cancelled run on the commit refuses, even a differ
   // A reopened green PR: two green runs with the same lines are still one passed test each.
   const twice = run({ runs: [green, { ...green, id: 2 }], jobsOf, logs: { 11: LOG, 21: LOG } });
   assert.equal(twice.status, 0, twice.out);
-  // But two tests one name matches, in one job, are ambiguous even when the other run has one.
-  const extra = LOG + '\n2026-11-20T10:00:01.0000000Z P9_PASS test/b.test.mjs :: beta works again';
+  // But one title passing twice in one job (two tests with the same title in one file) is ambiguous, even beside a clean run.
+  const extra = LOG + '\n2026-11-20T10:00:01.0000000Z P9_PASS test/b.test.mjs :: beta works when idle';
   refused(run({ runs: [green, { ...green, id: 2 }], jobsOf, logs: { 11: extra, 21: LOG } }), 'beta works matches 2 passed lines in one CI job');
+  // And two different titles in two jobs (one file's Linux and Windows tests) are ambiguous too.
+  const other = LOG.replace('beta works when idle', 'beta works on Windows').replace('beta works when idle', 'beta works on Windows');
+  refused(run({ runs: [green, { ...green, id: 2 }], jobsOf, logs: { 11: LOG, 21: other } }), 'beta works matches 2 passed tests');
 });
 
 // #574 round 2 blocker: a run by hand (workflow_dispatch: named files, bare, evidence) shares the Tests workflow with the PR's

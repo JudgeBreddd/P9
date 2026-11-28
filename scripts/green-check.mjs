@@ -84,7 +84,7 @@ async function main() {
   if (!runs.length) refuse(`item ${item}: no CI run on ${commit.slice(0, 8)}`);
   const open = runs.filter((r) => r.status !== 'completed'), red = runs.filter((r) => r.status === 'completed' && r.conclusion !== 'success');
   if (open.length) refuse(`item ${item}: CI on ${commit.slice(0, 8)} is not complete (${open.map((r) => r.name).join(', ')})`);
-  if (red.length) refuse(`item ${item}: CI on ${commit.slice(0, 8)} is not green (${red.map((r) => r.name + ' ' + r.conclusion).join(', ')})${red.some((r) => r.conclusion === 'cancelled') ? '; re-run a cancelled run (gh run rerun <id>)' : ''}`);
+  if (red.length) refuse(`item ${item}: CI on ${commit.slice(0, 8)} is not green (${red.map((r) => r.name + ' ' + r.conclusion).join(', ')})${red.some((r) => r.conclusion === 'cancelled') ? '; re-run it: gh run rerun ' + red.filter((r) => r.conclusion === 'cancelled').map((r) => r.id).join(' and gh run rerun ') : ''}`);
   const seen = [];
   for (const r of runs) for (const j of page(`repos/${repo}/actions/runs/${r.id}/jobs?per_page=100`, 'jobs')) {
     // C1 (O286): the quarantine shard is advisory (it never blocks), so its lines are no evidence either way.
@@ -100,8 +100,10 @@ async function main() {
     const hits = seen.filter((s) => s.title.includes(t.title)), ok = hits.filter((s) => s.ok && s.file === t.file), bad = hits.filter((s) => !s.ok);
     if (bad.length) refuse(`item ${item}: ${name} failed in CI (${bad.length} ✖ line${bad.length > 1 ? 's' : ''})`);
     if (!ok.length) refuse(`item ${item}: ${name} has no passed line in CI on ${commit.slice(0, 8)}`);
-    // #574 r4: one name must pick one test, so count per CI job; the same test in two runs (a reopened PR) or on two
-    // platforms is still one test.
+    // #574 r4-r5: one name must pick one test: one title across all jobs, and one line per job. The same test in two runs
+    // (a reopened PR) or on two platforms is still one test.
+    const titles = new Set(ok.map((s) => s.title));
+    if (titles.size > 1) refuse(`item ${item}: ${name} matches ${titles.size} passed tests; name it so it matches exactly one`);
     const most = Math.max(...Object.values(Object.groupBy(ok, (s) => s.job)).map((l) => l.length));
     if (most > 1) refuse(`item ${item}: ${name} matches ${most} passed lines in one CI job; name it so it matches exactly one`);
   }
