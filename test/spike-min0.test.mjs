@@ -45,8 +45,11 @@ test('SPIKE o294-min0', { skip: process.platform !== 'linux', timeout: 400000 },
     return 'no view';
   }, fn);
   const bounds = () => devView('return view.getBounds()');
-  const setWidth = width => devView(`const b = view.getBounds(); view.setBounds({ ...b, width: ${width} }); return view.getBounds();`);
-  const minWidth = n => dev.evaluate(n => { window.devFocus.minDims.width = n; window.devFocus.maxDims.width = n === 0 ? 0 : Number.POSITIVE_INFINITY; window.devFocus.layout.layout(); }, n);
+  const setWidthRaw = width => devView(`const b = view.getBounds(); view.setBounds({ ...b, width: ${width} }); return view.getBounds();`);
+  // What the build's client would do at 0 tabs on every resize: the file list takes the whole view beside the icon strip.
+  const fill = () => dev.evaluate(SIDE => { const l = window.devFocus.layout, act = document.querySelector('.part.activitybar').getBoundingClientRect().width; if (l.isVisible(SIDE) && window.devFocus.minDims.width === 0) { l.setSize(SIDE, { width: innerWidth - act, height: l.getSize(SIDE).height }); } }, SIDE);
+  const setWidth = async width => { const b = await setWidthRaw(width); await sleep(150); await fill(); return b; };
+  const minWidth = n => dev.evaluate(n => { window.devFocus.minDims.width = n; window.devFocus.layout.layout(); }, n);
   // P9's rule at 0 tabs, as a build would run it: the view's width = the icon strip plus the file list (when shown) at width W.
   const follow = async W => {
     const p = await parts(), shown = p.side > 0;
